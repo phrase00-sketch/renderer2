@@ -1,0 +1,34 @@
+{
+  "name": "@phrase00-sketch/renderer2",
+  "version": "1.0.0",
+  "description": "Deterministic local MP4 renderer for CDE2 and compatible HTML motion-design decks.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "render": "node capture-parallel.js",
+    "render:vt": "node scripts/render-vt.js",
+    "check": "node scripts/check.js",
+    "test": "node scripts/smoke-test.js",
+    "test:vt": "node scripts/smoke-test.js --vt"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "keywords": [
+    "cde2",
+    "renderer",
+    "puppeteer",
+    "ffmpeg",
+    "motion-design",
+    "video"
+  ],
+  "author": "phrase00-sketch",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phrase00-sketch/renderer2.git"
+  },
+  "dependencies": {
+    "puppeteer": "25.2.1"
+  }
+}

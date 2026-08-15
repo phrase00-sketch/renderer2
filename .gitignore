@@ -1,0 +1,12 @@
+node_modules/
+deck.mp4
+*.mp4
+renderer2-frames-*/
+_frames_tmp/
+*.log
+*.bak
+*.bak_*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
