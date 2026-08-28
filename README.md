@@ -58,13 +58,14 @@ Canvas、WebGL、rAF、タイマーを使うデッキは仮想時間方式を使
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキのコードから自動判定します。
+Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキ本体と同一パッケージ内のローカルスクリプトから自動判定します。Three.jsや重いWebGLを検出したVTデッキは、複数Chromiumの競合を避けるため既定で1並列になります。通常のCSS / VTデッキは従来どおり4並列です。キャプチャ区間が失敗した場合は、成功済み区間を残したまま失敗区間だけを1本ずつ再試行します。
 
 ### 主な設定
 
-環境変数で調整できます。既定値は `CONC=4`、`FPS=30`、`CRF=16`、`FORMAT=jpeg`、`JPEG_Q=92`、`PORT=8800`、`OUT=deck.mp4` です。
+環境変数で調整できます。既定値は `CONC=4`（重いWebGLのVTデッキは自動で1）、`FPS=30`、`CRF=16`、`FORMAT=jpeg`、`JPEG_Q=92`、`PORT=8800`、`OUT=deck.mp4` です。
 
-- `CONC`: 並列ワーカー数（1〜32）
+- `CONC`: コマンドライン実行時の並列ワーカー数（1〜32）。指定値は自動判定より優先
+- `RENDERER2_CONC`: Windowsランチャーの並列数を手動上書き（1〜32）
 - `FPS`: 出力フレームレート（1〜120）
 - `CRF`: H.264画質（0〜51。小さいほど高画質）
 - `PRESET`: FFmpeg / libx264プリセット（例: `veryfast`）
@@ -73,6 +74,9 @@ Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先�
 - `NOAUDIO=1`: すべての音声合成を無効化
 - `VIDAUDIO=1|0`: すべての動画音声を強制ON / OFF
 - `KEEP_FRAMES=1`: 診断用に中間フレームを残す
+- `PROTO_TIMEOUT`: 各ワーカーのPuppeteer通信制限時間（ミリ秒）
+- `RETRY_PROTO_TIMEOUT`: 失敗区間の再試行時の通信制限時間（既定300000ミリ秒）
+- `RETRY_FAILED_SHARDS=0`: 失敗区間だけの自動再試行を無効化
 - `PUPPETEER_EXECUTABLE_PATH`: 既存Chrome / Chromiumを使う場合の実行ファイル
 
 現在の最終エンコードはGPUエンコーダーではなくFFmpegの `libx264` を使います。速度はCPU、ストレージ、Chromiumキャプチャ、並列数の影響を受けます。
@@ -125,9 +129,9 @@ Use the virtual-time path for Canvas, WebGL, rAF, or timer-driven decks:
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
+On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. The launcher inspects the deck and local scripts inside the same package. Heavy Three.js / WebGL virtual-time decks default to one Chromium worker, while standard CSS and virtual-time decks keep the four-worker default. If a capture shard fails, only failed shards are retried sequentially with a longer protocol timeout. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
 
-The main environment variables are `CONC`, `FPS`, `CRF`, `FORMAT`, `JPEG_Q`, `PRESET`, `OUT`, `VT`, `NOAUDIO`, `VIDAUDIO`, `KEEP_FRAMES`, and `PUPPETEER_EXECUTABLE_PATH`. The current final encoding path uses FFmpeg `libx264`, so export speed depends on CPU, storage, browser capture, and concurrency rather than GPU encoding alone.
+The main environment variables are `CONC`, `FPS`, `CRF`, `FORMAT`, `JPEG_Q`, `PRESET`, `OUT`, `VT`, `NOAUDIO`, `VIDAUDIO`, `KEEP_FRAMES`, `PROTO_TIMEOUT`, `RETRY_PROTO_TIMEOUT`, `RETRY_FAILED_SHARDS`, and `PUPPETEER_EXECUTABLE_PATH`. An explicit `CONC` overrides command-line auto-tuning; set `RENDERER2_CONC=1..32` to override the Windows launcher. The current final encoding path uses FFmpeg `libx264`, so export speed depends on CPU, storage, browser capture, and concurrency rather than GPU encoding alone.
 
 Deck JavaScript runs inside local Chromium and may make network requests. Render only packages you created or trust. See [SECURITY.md](SECURITY.md), [THIRD_PARTY.md](THIRD_PARTY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
 

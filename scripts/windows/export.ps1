@@ -31,6 +31,58 @@ function Test-PathInside([string]$Parent, [string]$Candidate) {
   return $candidateFull.StartsWith($parentFull, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-DeckRoot([string]$DeckPath) {
+  $start = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($DeckPath))
+  if (Test-Path -LiteralPath (Join-Path $start 'support.js')) { return $start }
+  $current = $start
+  for ($i = 0; $i -lt 4; $i++) {
+    $parent = [IO.Path]::GetDirectoryName($current)
+    if (-not $parent -or $parent -eq $current) { break }
+    $current = $parent
+    if ((Test-Path -LiteralPath (Join-Path $current 'support.js')) -and
+        (Test-Path -LiteralPath (Join-Path $current 'manifest.json'))) {
+      return $current
+    }
+  }
+  return $start
+}
+
+function Get-DeckCodeBundle([string]$DeckPath) {
+  $deckFull = [IO.Path]::GetFullPath($DeckPath)
+  $deckDirectory = [IO.Path]::GetDirectoryName($deckFull)
+  $root = Get-DeckRoot $deckFull
+  $html = Get-Content -LiteralPath $deckFull -Raw -Encoding UTF8
+  $custom = @()
+  $seen = @{}
+
+  foreach ($match in [regex]::Matches($html, '(?i)<script\b[^>]*\bsrc\s*=\s*["'']([^"'']+)["'']')) {
+    $source = $match.Groups[1].Value -replace '[?#].*$', ''
+    if (-not $source -or $source -match '^(?i:https?:|data:|blob:|//)') { continue }
+    try { $source = [Uri]::UnescapeDataString($source) } catch {}
+    $name = [IO.Path]::GetFileName(($source -replace '/', '\'))
+    if ($name -match '^(?i:support|image-slot)\.js$') { continue }
+    try {
+      $candidate = if ($source -match '^[\\/]') {
+        [IO.Path]::GetFullPath((Join-Path $root ($source -replace '^[\\/]+', '')))
+      } else {
+        [IO.Path]::GetFullPath((Join-Path $deckDirectory $source))
+      }
+    } catch { continue }
+    if (-not (Test-PathInside $root $candidate)) { continue }
+    if ($seen.ContainsKey($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+    $item = Get-Item -LiteralPath $candidate
+    if ($item.Length -gt 5MB) { continue }
+    $seen[$candidate] = $true
+    $custom += $candidate
+  }
+
+  $blob = $html
+  foreach ($script in $custom) {
+    try { $blob += "`n" + (Get-Content -LiteralPath $script -Raw -Encoding UTF8) } catch {}
+  }
+  return [pscustomobject]@{ Html = $html; Custom = $custom; Blob = $blob; Root = $root }
+}
+
 function Resolve-Deck([string]$SourcePath) {
   $sourceFull = (Resolve-Path -LiteralPath $SourcePath).Path
   $extension = [IO.Path]::GetExtension($sourceFull).ToLowerInvariant()
@@ -78,11 +130,38 @@ function Remove-SafeTemp([string]$TempPath) {
 }
 
 function Get-RenderMode([string]$DeckPath) {
-  $html = Get-Content -LiteralPath $DeckPath -Raw -Encoding UTF8
-  $explicit = [regex]::Match($html, '(?i)data-render-mode\s*=\s*["''](css|vt)["'']')
+  $code = Get-DeckCodeBundle $DeckPath
+  $explicit = [regex]::Match($code.Html, '(?i)data-render-mode\s*=\s*["''](css|vt)["'']')
   if ($explicit.Success) { return $explicit.Groups[1].Value.ToLowerInvariant() }
-  if ($html -match '(?i)<canvas|getContext|webgl|offscreencanvas|requestAnimationFrame|setInterval') { return 'vt' }
+  if ($code.Blob -match '(?i)<canvas|getContext|webgl|offscreencanvas|requestAnimationFrame|setInterval') { return 'vt' }
   return 'css'
+}
+
+function Get-RenderProfile([string]$DeckPath, [string]$Mode) {
+  if ($Mode -ne 'vt') {
+    return [pscustomobject]@{ Name = 'standard CSS'; Concurrency = 4; ProtocolTimeout = 90000; Reason = 'CSS / WAAPI' }
+  }
+
+  $code = Get-DeckCodeBundle $DeckPath
+  $hits = @()
+  foreach ($rule in @(
+    @{ Label = 'Three.js'; Pattern = '(?i)\bTHREE\s*\.|WebGLRenderer\s*\(|\bthree(?:\.module|\.min)?\.js\b|\bthree(?:@|/)\d' },
+    @{ Label = 'WebGL'; Pattern = '(?i)getContext\s*\(\s*["'']webgl(?:2)?["'']|\bwebgl2?\b' },
+    @{ Label = 'WebGL high-load settings'; Pattern = '(?i)preserveDrawingBuffer|shadowMap\s*\.|\.shadowMapSize\b' }
+  )) {
+    if ($code.Blob -match $rule.Pattern) { $hits += $rule.Label }
+  }
+
+  if ($hits.Count -gt 0) {
+    return [pscustomobject]@{
+      Name = 'heavy WebGL / 3D'
+      Concurrency = 1
+      ProtocolTimeout = 180000
+      Reason = (($hits | Select-Object -Unique) -join ', ')
+    }
+  }
+
+  return [pscustomobject]@{ Name = 'standard virtual time'; Concurrency = 4; ProtocolTimeout = 120000; Reason = 'Canvas / rAF / timers' }
 }
 
 function Get-AutoOutput([string]$SourcePath) {
@@ -136,14 +215,26 @@ try {
       }
 
       $mode = Get-RenderMode $resolved.Deck
+      $profile = Get-RenderProfile $resolved.Deck $mode
+      $concurrency = $profile.Concurrency
+      if (-not [string]::IsNullOrWhiteSpace($env:RENDERER2_CONC)) {
+        if ($env:RENDERER2_CONC -notmatch '^\d+$' -or [int]$env:RENDERER2_CONC -lt 1 -or [int]$env:RENDERER2_CONC -gt 32) {
+          throw 'RENDERER2_CONC は1〜32の整数で指定してください。'
+        }
+        $concurrency = [int]$env:RENDERER2_CONC
+      }
       $env:VT = if ($mode -eq 'vt') { '1' } else { '' }
-      $env:CONC = '4'
+      $env:CONC = [string]$concurrency
+      $env:PROTO_TIMEOUT = [string]$profile.ProtocolTimeout
+      $env:RETRY_PROTO_TIMEOUT = [string]([Math]::Max(300000, $profile.ProtocolTimeout))
+      $env:RETRY_FAILED_SHARDS = '1'
       $env:FORMAT = 'jpeg'
       $env:PRESET = 'veryfast'
       $env:OUT = $output
 
       Write-Host "RENDERER2: $sourceFull"
-      Write-Host "mode=$mode  output=$output"
+      Write-Host "mode=$mode  load=$($profile.Name) ($($profile.Reason))"
+      Write-Host "CONC=$concurrency  PROTO_TIMEOUT=$($profile.ProtocolTimeout)ms  output=$output"
       & node $renderer $resolved.Deck
       if ($LASTEXITCODE -ne 0) { throw "レンダラーがコード $LASTEXITCODE で終了しました。" }
       $results += [pscustomobject]@{ Source = $sourceFull; Output = $output; Success = $true }

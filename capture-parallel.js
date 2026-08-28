@@ -1,4 +1,6 @@
-// RENDERER2 capture-parallel v4.11 OSS（並列キャプチャ・オーケストレータ）
+// RENDERER2 capture-parallel v4.12 OSS（並列キャプチャ・オーケストレータ）
+// - v4.12 OSS: VTのThree.js/WebGLデッキは未指定時の並列数を1へ自動調整し、
+//              失敗したシャードだけを長いPuppeteer制限時間で直列再試行する。
 // - v4.11 OSS: 実行ごとに固有のフレーム一時フォルダを作り、並行実行時の衝突と
 //              固定パスの再帰削除を避ける。公開版向けに入力値検証も追加。
 // - v4.9: デッキが uploads/○○_指示一式/ の下にあるCDE2 ZIP（support.js等はZIPルート側）で
@@ -14,7 +16,8 @@
 //         （音声は各動画のシーン開始時刻に配置。loop属性の動画はシーン尺まで音声も反復。
 //          動画音声の音量: VIDVOL=0.8 等 ／ 検出結果表示: VIDAUDIO_DEBUG=1）
 // 使い方: node capture-parallel.js "デッキ.dc.html"
-// 環境変数: CONC=並列数(既定4) FORMAT=jpeg(既定) JPEG_Q=92 FPS=30 CRF=16 PRESET= OUT=deck.mp4 PORT=8800(基準) KEEP_FRAMES=1
+// 環境変数: CONC=並列数(既定4、重いVTは自動1) FORMAT=jpeg(既定) JPEG_Q=92 FPS=30 CRF=16 PRESET= OUT=deck.mp4
+//              PORT=8800(基準) KEEP_FRAMES=1 PROTO_TIMEOUT=ms RETRY_PROTO_TIMEOUT=ms RETRY_FAILED_SHARDS=0|1
 // 各ワーカー(capture-deck2.js)が担当フレーム区間を FRAMES_DIR に書き出し、最後に親が1回だけ ffmpeg で結合＋音声合成する。
 const fs = require('fs');
 const path = require('path');
@@ -53,6 +56,54 @@ const ROOT = resolveDeckRoot(DECK_ABS);
 if (ROOT !== path.dirname(DECK_ABS)) console.log('ROOT hoisted ->', ROOT, '(デッキは配下の uploads/... にあります)');
 const NFC = function (s) { try { return s.normalize('NFC'); } catch (e) { return s; } };
 
+function isPathInside(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative !== '' && !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+// デッキ本体と、同じパッケージROOT内で参照される独自JavaScriptだけを負荷判定に使う。
+// 外部URL、ROOT外への相対参照、共通ランタイムは読み込まない。
+function readDeckCodeBundle(deckAbs, root) {
+  const html = fs.readFileSync(deckAbs, 'utf8');
+  const parts = [html];
+  const seen = new Set();
+  const scriptRe = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+  let match;
+  while ((match = scriptRe.exec(html)) && seen.size < 64) {
+    let source = match[1].split(/[?#]/, 1)[0];
+    if (!source || /^(?:https?:|data:|blob:|\/\/)/i.test(source)) continue;
+    try { source = decodeURIComponent(source); } catch (e) {}
+    const name = path.basename(source.replace(/\\/g, '/'));
+    if (/^(?:support|image-slot)\.js$/i.test(name)) continue;
+    const candidate = /^[\\/]/.test(source)
+      ? path.resolve(root, source.replace(/^[\\/]+/, ''))
+      : path.resolve(path.dirname(deckAbs), source);
+    if (!isPathInside(root, candidate) || seen.has(candidate)) continue;
+    if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) continue;
+    if (fs.statSync(candidate).size > 5 * 1024 * 1024) continue;
+    seen.add(candidate);
+    parts.push(fs.readFileSync(candidate, 'utf8'));
+  }
+  return parts.join('\n');
+}
+
+const VT = process.env.VT === '1';
+let HEAVY_WEBGL_HITS = [];
+if (VT) {
+  try {
+    const code = readDeckCodeBundle(DECK_ABS, ROOT);
+    const rules = [
+      ['Three.js', /\bTHREE\s*\.|WebGLRenderer\s*\(|\bthree(?:\.module|\.min)?\.js\b|\bthree(?:@|\/)\d/i],
+      ['WebGL', /getContext\s*\(\s*["']webgl(?:2)?["']|\bwebgl2?\b/i],
+      ['WebGL high-load settings', /preserveDrawingBuffer|shadowMap\s*\.|\.shadowMapSize\b/i],
+    ];
+    HEAVY_WEBGL_HITS = rules.filter(function (rule) { return rule[1].test(code); }).map(function (rule) { return rule[0]; });
+  } catch (e) {
+    console.log('負荷自動判定: コードを読み取れないため標準設定を使用 (' + e.message + ')');
+  }
+}
+const HEAVY_WEBGL = HEAVY_WEBGL_HITS.length > 0;
+
 function finiteNumber(name, fallback, min, max) {
   const value = Number(process.env[name] == null ? fallback : process.env[name]);
   if (!Number.isFinite(value) || value < min || value > max) {
@@ -60,7 +111,8 @@ function finiteNumber(name, fallback, min, max) {
   }
   return value;
 }
-const CONC = Math.floor(finiteNumber('CONC', 4, 1, 32));
+const CONC_WAS_SET = process.env.CONC != null && String(process.env.CONC).trim() !== '';
+const CONC = Math.floor(finiteNumber('CONC', HEAVY_WEBGL ? 1 : 4, 1, 32));
 const FPS = finiteNumber('FPS', 30, 1, 120);
 const CRF = String(Math.floor(finiteNumber('CRF', 16, 0, 51)));
 const FORMAT = (process.env.FORMAT || 'jpeg').toLowerCase();
@@ -72,6 +124,9 @@ const NOAUDIO = process.env.NOAUDIO === '1';
 const VIDEO_AUDIO_MODE = process.env.VIDAUDIO === '1' ? 'all' : (process.env.VIDAUDIO === '0' ? 'off' : 'opt-in');
 const BASEPORT = Math.floor(finiteNumber('PORT', 8800, 1024, 65535 - CONC));
 const EXT = FORMAT === 'jpeg' ? 'jpg' : 'png';
+const RETRY_FAILED_SHARDS = process.env.RETRY_FAILED_SHARDS !== '0';
+const PROTOCOL_TIMEOUT = Math.floor(finiteNumber('PROTO_TIMEOUT', HEAVY_WEBGL ? 180000 : 90000, 1000, 900000));
+const RETRY_PROTO_TIMEOUT = Math.floor(finiteNumber('RETRY_PROTO_TIMEOUT', Math.max(300000, PROTOCOL_TIMEOUT), PROTOCOL_TIMEOUT, 900000));
 const tempBase = process.env.RENDERER2_TEMP
   ? path.resolve(process.env.RENDERER2_TEMP)
   : os.tmpdir();
@@ -253,6 +308,15 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     videoAudioMode: VIDEO_AUDIO_MODE,
     narrationAudio: AUDIO,
     mediaClips: VIDCLIPS,
+    renderProfile: {
+      virtualTime: VT,
+      heavyWebGL: HEAVY_WEBGL,
+      reasons: HEAVY_WEBGL_HITS,
+      concurrency: CONC,
+      concurrencySource: CONC_WAS_SET ? 'explicit' : 'automatic',
+      protocolTimeout: PROTOCOL_TIMEOUT,
+      retryProtocolTimeout: RETRY_PROTO_TIMEOUT,
+    },
   }));
   process.exit(0);
 }
@@ -261,11 +325,15 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
   fs.mkdirSync(tempBase, { recursive: true });
   FRAMES_DIR = fs.mkdtempSync(path.join(tempBase, 'renderer2-frames-'));
   console.log('並列キャプチャ: CONC=' + CONC + ' / FORMAT=' + FORMAT + ' / audio=' + (AUDIO ? 'yes' : 'no'));
+  if (HEAVY_WEBGL) {
+    console.log('負荷自動判定: 重いWebGL/3D (' + HEAVY_WEBGL_HITS.join(', ') + ')'
+      + ' / CONC=' + CONC + (CONC_WAS_SET ? ' (明示設定)' : ' (自動)')
+      + ' / PROTO_TIMEOUT=' + PROTOCOL_TIMEOUT + 'ms');
+  }
   console.log('frames -> ' + FRAMES_DIR);
   const t0 = Date.now();
   // VT=1 で仮想時間ワーカー（rAF/canvas/setTimeout対応の新表現経路）を選択。
   // 未指定時は従来の高速CSS経路（getAnimationsシーク）。
-  const VT = process.env.VT === '1';
   const worker = path.join(__dirname, VT ? 'capture-deck2-vt.js' : 'capture-deck2.js');
   console.log('worker: ' + path.basename(worker) + (VT ? '  (virtual-time / 新表現解禁)' : '  (CSS高速)'));
 
@@ -276,8 +344,7 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     process.stdout.write('\r  capturing... ' + n + ' frames  ' + el + 's   ');
   }, 2000);
 
-  const procs = [];
-  for (let s = 0; s < CONC; s++) {
+  function runShard(s, isRetry) {
     const env = Object.assign({}, process.env, {
       SHARDS: String(CONC),
       SHARD: String(s),
@@ -287,14 +354,46 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
       FPS: String(FPS),
       PORT: String(BASEPORT + s),
       NOAUDIO: '1',
+      PROTO_TIMEOUT: String(isRetry ? RETRY_PROTO_TIMEOUT : PROTOCOL_TIMEOUT),
     });
+    if (isRetry) {
+      console.log('\n  再試行: shard ' + s + '/' + CONC + ' / PROTO_TIMEOUT=' + env.PROTO_TIMEOUT + 'ms');
+    }
     const p = spawn(process.execPath, [worker, DECK_ABS], { env: env, stdio: ['ignore', 'ignore', 'inherit'] });
-    procs.push(new Promise(function (res, rej) {
-      p.on('close', function (code) { code === 0 ? res() : rej(new Error('worker ' + s + ' exited ' + code)); });
-      p.on('error', rej);
-    }));
+    return new Promise(function (resolve) {
+      let settled = false;
+      function finish(code, error) {
+        if (settled) return;
+        settled = true;
+        resolve({ shard: s, code: code, error: error || null });
+      }
+      p.on('close', function (code) { finish(code == null ? 1 : code, null); });
+      p.on('error', function (error) { finish(1, error); });
+    });
   }
-  await Promise.all(procs);
+
+  const firstPass = [];
+  for (let s = 0; s < CONC; s++) firstPass.push(runShard(s, false));
+  const firstResults = await Promise.all(firstPass);
+  let failed = firstResults.filter(function (result) { return result.code !== 0; });
+
+  if (failed.length && RETRY_FAILED_SHARDS) {
+    console.log('\n初回キャプチャで ' + failed.length + ' 区間が失敗。失敗区間だけを1本ずつ再試行します。');
+    const retryFailures = [];
+    for (const result of failed) {
+      const retried = await runShard(result.shard, true);
+      if (retried.code !== 0) retryFailures.push(retried);
+    }
+    failed = retryFailures;
+  }
+
+  if (failed.length) {
+    const detail = failed.map(function (result) {
+      return 'worker ' + result.shard + ' exited ' + result.code
+        + (result.error ? ' (' + result.error.message + ')' : '');
+    }).join(', ');
+    throw new Error(detail);
+  }
   clearInterval(hb);
   const capSec = (Date.now() - t0) / 1000;
   const n = fs.readdirSync(FRAMES_DIR).filter(function (f) { return f.endsWith('.' + EXT); }).length;
