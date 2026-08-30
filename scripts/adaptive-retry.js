@@ -55,6 +55,19 @@ async function captureWithFallback(options) {
     failed = await runStage('adaptive', failed.map(function (result) { return result.shard; }), 2, protocolTimeout);
   }
 
+  if (failed.length === shards.length && options.collapseStartupStalls
+      && failed.every(function (result) { return result.code === 124; })) {
+    const stage = {
+      name: 'final-collapsed',
+      concurrency: 1,
+      timeout: retryProtocolTimeout,
+      shards: shards.slice(),
+      collapseAll: true,
+    };
+    onStage(stage);
+    return failures([await runShard(shards[0], stage)]);
+  }
+
   if (failed.length) {
     failed = await runStage('final', failed.map(function (result) { return result.shard; }), 1, retryProtocolTimeout);
   }

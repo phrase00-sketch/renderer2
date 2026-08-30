@@ -66,10 +66,33 @@ async function testRetryDisabled() {
   assert.deepStrictEqual(failed.map(function (result) { return result.shard; }), [2]);
 }
 
+async function testCollapseAllStartupStalls() {
+  const stages = [];
+  const calls = [];
+  const failed = await captureWithFallback({
+    shards: [0, 1, 2, 3],
+    initialConcurrency: 4,
+    protocolTimeout: 180000,
+    retryProtocolTimeout: 300000,
+    retryEnabled: true,
+    adaptive: true,
+    collapseStartupStalls: true,
+    onStage: function (stage) { stages.push(stage.name); },
+    runShard: async function (shard, stage) {
+      calls.push([shard, stage.name, !!stage.collapseAll]);
+      return { shard: shard, code: stage.collapseAll ? 0 : 124, error: null };
+    },
+  });
+  assert.deepStrictEqual(failed, []);
+  assert.deepStrictEqual(stages, ['initial', 'adaptive', 'final-collapsed']);
+  assert.deepStrictEqual(calls[calls.length - 1], [0, 'final-collapsed', true]);
+}
+
 (async function () {
   await testConcurrencyLimit();
   await testFourTwoOneFallback();
   await testRetryDisabled();
+  await testCollapseAllStartupStalls();
   console.log('Adaptive retry tests passed.');
 })().catch(function (error) {
   console.error(error && error.stack || error);

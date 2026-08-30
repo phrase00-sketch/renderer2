@@ -1,4 +1,7 @@
-// RENDERER2 capture-parallel v4.13 OSS（並列キャプチャ・オーケストレータ）
+// RENDERER2 capture-parallel v4.14 OSS（並列キャプチャ・オーケストレータ）
+// - v4.14 OSS: 重いWebGLで最初のフレームが一定時間出ない並列段階を早期終了し、
+//              4→2の全ワーカーが起動停止した場合はデッキ全体を1ブラウザへ統合する。
+//              ワーカー別の起動・pre-roll・capture時間も終了時に表示する。
 // - v4.13 OSS: VTのThree.js/WebGLデッキは4並列で開始し、失敗区間だけを
 //              2並列、最後に1並列＋長いPuppeteer制限時間で段階再試行する。
 // - v4.12 OSS: VTのThree.js/WebGLデッキは未指定時の並列数を1へ自動調整し、
@@ -130,6 +133,9 @@ const EXT = FORMAT === 'jpeg' ? 'jpg' : 'png';
 const RETRY_FAILED_SHARDS = process.env.RETRY_FAILED_SHARDS !== '0';
 const PROTOCOL_TIMEOUT = Math.floor(finiteNumber('PROTO_TIMEOUT', HEAVY_WEBGL ? 180000 : 90000, 1000, 900000));
 const RETRY_PROTO_TIMEOUT = Math.floor(finiteNumber('RETRY_PROTO_TIMEOUT', Math.max(300000, PROTOCOL_TIMEOUT), PROTOCOL_TIMEOUT, 900000));
+const STARTUP_STALL_TIMEOUT = Math.floor(finiteNumber(
+  'STARTUP_STALL_TIMEOUT', HEAVY_WEBGL ? 100000 : 0, 0, 900000
+));
 const tempBase = process.env.RENDERER2_TEMP
   ? path.resolve(process.env.RENDERER2_TEMP)
   : os.tmpdir();
@@ -340,36 +346,50 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
   // 未指定時は従来の高速CSS経路（getAnimationsシーク）。
   const worker = path.join(__dirname, VT ? 'capture-deck2-vt.js' : 'capture-deck2.js');
   console.log('worker: ' + path.basename(worker) + (VT ? '  (virtual-time / 新表現解禁)' : '  (CSS高速)'));
+  if (HEAVY_WEBGL && STARTUP_STALL_TIMEOUT > 0 && CONC > 1) {
+    console.log('startup watchdog: first frame ' + STARTUP_STALL_TIMEOUT + 'ms / fallback ' + CONC + ' -> 2 -> 1');
+  }
+  const shardMetrics = new Map();
 
   const hb = setInterval(function () {
     let n = 0;
-    try { n = fs.readdirSync(FRAMES_DIR).length; } catch (e) {}
+    try { n = fs.readdirSync(FRAMES_DIR).filter(function (file) { return file.endsWith('.' + EXT); }).length; } catch (e) {}
     const el = ((Date.now() - t0) / 1000).toFixed(0);
     process.stdout.write('\r  capturing... ' + n + ' frames  ' + el + 's   ');
   }, 2000);
 
   function runShard(s, stage) {
+    const collapsed = stage.collapseAll === true;
     const env = Object.assign({}, process.env, {
-      SHARDS: String(CONC),
-      SHARD: String(s),
+      SHARDS: String(collapsed ? 1 : CONC),
+      SHARD: String(collapsed ? 0 : s),
       FRAMES_DIR: FRAMES_DIR,
       FORMAT: FORMAT,
       JPEG_Q: JPEG_Q,
       FPS: String(FPS),
-      PORT: String(BASEPORT + s),
+      PORT: String(BASEPORT + (collapsed ? 0 : s)),
       NOAUDIO: '1',
       PROTO_TIMEOUT: String(stage.timeout),
+      STARTUP_STALL_TIMEOUT: String(stage.concurrency > 1 ? STARTUP_STALL_TIMEOUT : 0),
     });
     if (stage.name !== 'initial') {
-      console.log('\n  再試行(' + stage.concurrency + '並列): shard ' + s + '/' + CONC
+      console.log('\n  retry (' + stage.concurrency + ' worker): ' + (collapsed ? 'all ranges collapsed into one worker' : ('shard ' + s + '/' + CONC))
         + ' / PROTO_TIMEOUT=' + env.PROTO_TIMEOUT + 'ms');
     }
-    const p = spawn(process.execPath, [worker, DECK_ABS], { env: env, stdio: ['ignore', 'ignore', 'inherit'] });
+    const p = spawn(process.execPath, [worker, DECK_ABS], { env: env, stdio: ['ignore', 'pipe', 'inherit'] });
     return new Promise(function (resolve) {
       let settled = false;
+      let output = '';
+      p.stdout.setEncoding('utf8');
+      p.stdout.on('data', function (chunk) { output = (output + chunk).slice(-250000); });
       function finish(code, error) {
         if (settled) return;
         settled = true;
+        const matches = Array.from(output.matchAll(/RENDERER2_METRICS\s+(\{[^\r\n]+\})/g));
+        if (matches.length) {
+          try { shardMetrics.set(s, JSON.parse(matches[matches.length - 1][1])); } catch (e) {}
+        }
+        if (code !== 0 && output.trim()) console.error('\n  worker ' + s + ' details:\n' + output.slice(-5000));
         resolve({ shard: s, code: code, error: error || null });
       }
       p.on('close', function (code) { finish(code == null ? 1 : code, null); });
@@ -384,6 +404,7 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     retryProtocolTimeout: RETRY_PROTO_TIMEOUT,
     retryEnabled: RETRY_FAILED_SHARDS,
     adaptive: HEAVY_WEBGL,
+    collapseStartupStalls: HEAVY_WEBGL,
     runShard: runShard,
     onStage: function (stage) {
       if (stage.name === 'adaptive') {
@@ -393,6 +414,8 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
         const lead = HEAVY_WEBGL && CONC > 2 ? '2並列での再試行後も ' : '初回キャプチャで ';
         console.log('\n' + lead + stage.shards.length + ' 区間が未完了。'
           + '失敗区間だけを1本ずつ、長い通信待ち時間で最終再試行します。');
+      } else if (stage.name === 'final-collapsed') {
+        console.log('\nAll ranges stalled at every multi-worker stage; retrying the full deck with one browser to avoid repeated startup cost.');
       }
     },
   });
@@ -405,6 +428,23 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     throw new Error(detail);
   }
   clearInterval(hb);
+  if (shardMetrics.size) {
+    console.log('\n--- shard telemetry ---');
+    const rows = Array.from(shardMetrics.values()).sort(function (a, b) { return a.shard - b.shard; });
+    for (const metric of rows) {
+      const fps = metric.captureMs > 0 ? metric.frames / (metric.captureMs / 1000) : 0;
+      console.log('shard ' + metric.shard + ' [' + metric.startFrame + ',' + metric.endFrame + ')'
+        + ' launch=' + (metric.launchMs / 1000).toFixed(1) + 's'
+        + ' boot=' + (metric.bootMs / 1000).toFixed(1) + 's'
+        + ' pre-roll=' + metric.preRollFrames + 'f/' + (metric.preRollMs / 1000).toFixed(1) + 's'
+        + ' capture=' + (metric.captureMs / 1000).toFixed(1) + 's/' + fps.toFixed(2) + 'fps'
+        + ' step=' + metric.avgStepMs + 'ms shot=' + metric.avgScreenshotMs + 'ms write=' + metric.avgWriteMs + 'ms');
+    }
+    const totals = rows.map(function (metric) { return metric.totalMs; });
+    const fastest = Math.min.apply(null, totals);
+    const slowest = Math.max.apply(null, totals);
+    console.log('straggler ratio: ' + (slowest / Math.max(1, fastest)).toFixed(2) + 'x');
+  }
   const capSec = (Date.now() - t0) / 1000;
   const n = fs.readdirSync(FRAMES_DIR).filter(function (f) { return f.endsWith('.' + EXT); }).length;
   console.log('\nキャプチャ完了: ' + n + ' frames / ' + capSec.toFixed(1) + 's (capFPS=' + (n / capSec).toFixed(2) + ')');

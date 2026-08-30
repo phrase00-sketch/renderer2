@@ -58,7 +58,7 @@ Canvas、WebGL、rAF、タイマーを使うデッキは仮想時間方式を使
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキ本体と同一パッケージ内のローカルスクリプトから自動判定します。通常のCSS / VTデッキも、Three.jsや重いWebGLを検出したVTデッキも、まず4並列でキャプチャします。重いWebGLで区間が失敗した場合は、成功済みフレームを残したまま失敗区間だけを最大2並列、最後に1並列＋長い通信待ち時間で段階的に再試行します。4並列で完走するデッキには再試行の待ち時間は加わりません。
+Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキ本体と同一パッケージ内のローカルスクリプトから自動判定します。通常のCSS / VTデッキも、Three.jsや重いWebGLを検出したVTデッキも、まず4並列でキャプチャします。重いWebGLで区間が失敗した場合は、成功済みフレームを残したまま失敗区間だけを最大2並列、最後に1並列＋長い通信待ち時間で段階的に再試行します。全ワーカーが最初のフレームを100秒間作れない段階は早期終了し、4並列と2並列の両方が起動停止した場合は、デッキ全体を1ブラウザへ統合して再試行します。4並列で完走するデッキには再試行の待ち時間は加わりません。
 
 ### 主な設定
 
@@ -75,6 +75,7 @@ Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先�
 - `VIDAUDIO=1|0`: すべての動画音声を強制ON / OFF
 - `KEEP_FRAMES=1`: 診断用に中間フレームを残す
 - `PROTO_TIMEOUT`: 各ワーカーのPuppeteer通信制限時間（ミリ秒）
+- `STARTUP_STALL_TIMEOUT`: 重いWebGLの複数ワーカー段階で最初のフレームを待つ時間（既定100000ミリ秒、`0`で無効）
 - `RETRY_PROTO_TIMEOUT`: 最終1並列再試行時の通信制限時間（既定300000ミリ秒）
 - `RETRY_FAILED_SHARDS=0`: 失敗区間だけの段階的な自動再試行を無効化
 - `PUPPETEER_EXECUTABLE_PATH`: 既存Chrome / Chromiumを使う場合の実行ファイル
@@ -129,9 +130,9 @@ Use the virtual-time path for Canvas, WebGL, rAF, or timer-driven decks:
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. The launcher inspects the deck and local scripts inside the same package. Heavy Three.js / WebGL virtual-time decks now start with four Chromium workers. If a capture shard fails, completed frames remain in place while only failed shards step down to at most two workers, then one worker with a longer protocol timeout. Decks that complete at four workers pay no retry cost. Standard CSS and virtual-time decks retain the four-worker default and sequential failed-shard retry. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
+On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. The launcher inspects the deck and local scripts inside the same package. Heavy Three.js / WebGL virtual-time decks start with four Chromium workers. If a capture shard fails, completed frames remain in place while only failed shards step down to at most two workers, then one worker with a longer protocol timeout. A multi-worker stage that produces no first frame for 100 seconds exits early; if every worker stalls at both four and two workers, the final retry captures the full deck in one browser instead of paying four separate browser startups. Decks that complete at four workers pay no retry cost. Standard CSS and virtual-time decks retain the four-worker default and sequential failed-shard retry. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
 
-The main environment variables are `CONC`, `FPS`, `CRF`, `FORMAT`, `JPEG_Q`, `PRESET`, `OUT`, `VT`, `NOAUDIO`, `VIDAUDIO`, `KEEP_FRAMES`, `PROTO_TIMEOUT`, `RETRY_PROTO_TIMEOUT`, `RETRY_FAILED_SHARDS`, and `PUPPETEER_EXECUTABLE_PATH`. `CONC` sets the initial command-line worker count; set `RENDERER2_CONC=1..32` to override the Windows launcher. For heavy WebGL, choosing 1, 2, or 4 produces a 1, 2→1, or 4→2→1 path. The current final encoding path uses FFmpeg `libx264`, so export speed depends on CPU, storage, browser capture, and concurrency rather than GPU encoding alone.
+The main environment variables are `CONC`, `FPS`, `CRF`, `FORMAT`, `JPEG_Q`, `PRESET`, `OUT`, `VT`, `NOAUDIO`, `VIDAUDIO`, `KEEP_FRAMES`, `PROTO_TIMEOUT`, `STARTUP_STALL_TIMEOUT`, `RETRY_PROTO_TIMEOUT`, `RETRY_FAILED_SHARDS`, and `PUPPETEER_EXECUTABLE_PATH`. `CONC` sets the initial command-line worker count; set `RENDERER2_CONC=1..32` to override the Windows launcher. For heavy WebGL, choosing 1, 2, or 4 produces a 1, 2→1, or 4→2→1 path. `STARTUP_STALL_TIMEOUT` defaults to 100000 milliseconds for heavy WebGL multi-worker stages and accepts `0` to disable the startup watchdog. The current final encoding path uses FFmpeg `libx264`, so export speed depends on CPU, storage, browser capture, and concurrency rather than GPU encoding alone.
 
 Deck JavaScript runs inside local Chromium and may make network requests. Render only packages you created or trust. See [SECURITY.md](SECURITY.md), [THIRD_PARTY.md](THIRD_PARTY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
 

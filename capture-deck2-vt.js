@@ -1,4 +1,5 @@
-// RENDERER2 capture v4.11 OSS (virtual-time VT worker)
+// RENDERER2 capture v4.12 OSS (virtual-time VT worker)
+// - v4.12 OSS: 最初のフレームが出ないワーカーの起動監視と、段階別の性能計測を追加。
 // - v4.11 OSS: ローカル配信用のパス境界検証と入力ファイル検証を追加。
 // - v4.10: <video data-vin="秒"> をCDE2と同じ意味の素材開始位置として反映（2026-08-04）
 // - v4.9: デッキが uploads/○○_指示一式/ の下にあるCDE2 ZIPでROOTをZIPルートまで遡上（2026-08-01）
@@ -109,6 +110,36 @@ const BOOT_MS = Number(process.env.BOOT_MS || 60000);
 const frameMs = 1000 / FPS;
 const MAXSEC = Number(process.env.MAXSEC || 0); // >0なら先頭N秒だけ書き出し（検証用の時短ラン）
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function boundedTimeoutFromEnv(name, fallback) {
+  const raw = process.env[name];
+  const value = Number(raw == null || String(raw).trim() === '' ? fallback : raw);
+  if (!Number.isFinite(value) || value < 0 || value > 900000) {
+    throw new Error(name + ' must be a number between 0 and 900000 milliseconds');
+  }
+  return Math.floor(value);
+}
+const STARTUP_STALL_TIMEOUT = boundedTimeoutFromEnv('STARTUP_STALL_TIMEOUT', 0);
+let activeBrowser = null;
+let activeServer = null;
+let startupGuard = null;
+
+function disarmStartupGuard() {
+  if (startupGuard) clearTimeout(startupGuard);
+  startupGuard = null;
+}
+
+function armStartupGuard() {
+  if (!(STARTUP_STALL_TIMEOUT > 0)) return;
+  startupGuard = setTimeout(async () => {
+    startupGuard = null;
+    console.error('\n[VT] STARTUP_STALL: no first frame after ' + STARTUP_STALL_TIMEOUT + 'ms; retrying with lower concurrency.');
+    const hardExit = setTimeout(() => process.exit(124), 2500);
+    try { if (activeBrowser) await activeBrowser.close(); } catch (e) {}
+    try { if (activeServer) activeServer.close(); } catch (e) {}
+    clearTimeout(hardExit);
+    process.exit(124);
+  }, STARTUP_STALL_TIMEOUT);
+}
 
 // --- BOUNDS: env > デッキhtmlから正規抽出 > デフォルト ---
 const htmlText = fs.readFileSync(DECK_ABS, 'utf8');
@@ -247,7 +278,10 @@ function sceneIndexOf(T) {
 }
 
 (async () => {
+  const workerStartedAt = Date.now();
   const server = await startServer();
+  activeServer = server;
+  armStartupGuard();
   const url = 'http://127.0.0.1:' + PORT + '/' + encodeURIComponent(FILE);
   console.log('[VT] serving', ROOT, '->', url);
 
@@ -270,7 +304,9 @@ function sceneIndexOf(T) {
   };
   if (process.env.PUPPETEER_EXECUTABLE_PATH) launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   const browser = await puppeteer.launch(launchOptions);
+  activeBrowser = browser;
   const page = await browser.newPage();
+  const browserReadyAt = Date.now();
   const failed = [];
   page.on('requestfailed', r => failed.push(r.url() + ' :: ' + (r.failure() && r.failure().errorText)));
   page.on('console', m => { if (m.type() === 'error') console.log('[page-error]', m.text()); });
@@ -329,6 +365,7 @@ function sceneIndexOf(T) {
   // Freeze clock, START navigation (no lifecycle await), boot under virtual time.
   await client.send('Page.enable');
   await client.send('Emulation.setVirtualTimePolicy', { policy: 'pause' });
+  const navigationStartedAt = Date.now();
   await client.send('Page.navigate', { url });
 
   // --- boot detection: advance the clock in chunks; let localhost fetches
@@ -363,6 +400,7 @@ function sceneIndexOf(T) {
     console.error('\n⛔ デッキが起動しませんでした。上の BOOT / FAILED REQUESTS を貼ってください。');
     await browser.close(); server.close(); process.exit(2);
   }
+  const bootReadyAt = Date.now();
   console.log('[VT] ✅ 起動OK。');
 
   // v4.3: ステージ寸法を自動検出してビューポートを合わせる（縦・任意サイズ対応）
@@ -380,6 +418,7 @@ function sceneIndexOf(T) {
   await sleep(800);
   await advance(WARMUP_MS);
   await sleep(400);
+  const warmupReadyAt = Date.now();
 
   // --- 尺(DURATION): env > slider.max > BOUNDS末尾+6 ---
   let DURATION = Number(process.env.DURATION || HTML_DURATION || 0);
@@ -625,16 +664,20 @@ function sceneIndexOf(T) {
   // --- shard warmup: mount the shard's first scene fresh, then warm-step from
   //     that scene's start frame up to startF (no screenshot). Bounded by one
   //     scene length. ---
+  const preRollStartedAt = Date.now();
+  let preRollFrames = 0;
   if (startF > 0) {
     await reanchorBefore(startF);
     const sIdx = deckLike ? sceneIndexOf(startF / FPS) : 0;
     const sceneStartFrame = deckLike ? Math.round(BOUNDS[sIdx] * FPS) : 0;
+    preRollFrames = Math.max(0, startF - Math.max(0, sceneStartFrame));
     for (let j = Math.max(0, sceneStartFrame); j < startF; j++) {
       await frameStep(j / FPS);
     }
   } else {
     await reanchorBefore(0);
   }
+  const preRollReadyAt = Date.now();
 
   // --- capture loop ---
   let tStep = 0, tShot = 0, tWrite = 0; const tStart = Date.now();
@@ -680,6 +723,7 @@ function sceneIndexOf(T) {
         await new Promise(r => { ff.stdin.once('drain', r); ff.stdin.once('error', r); });
       }
     }
+    disarmStartupGuard();
     tWrite += Date.now() - _w0;
     if (i % 60 === 0) {
       const _el = (Date.now() - tStart) / 1000;
@@ -693,6 +737,7 @@ function sceneIndexOf(T) {
     if (!ff.stdin.destroyed && !ff.stdin.writableEnded) ff.stdin.end();
     if (!ffClosed) await new Promise(r => ff.on('close', r));
   }
+  disarmStartupGuard();
   await browser.close();
   server.close();
   const _elapsed = (Date.now() - tStart) / 1000;
@@ -702,4 +747,21 @@ function sceneIndexOf(T) {
   console.log('[VT] avg/frame: step=' + (tStep / _cap).toFixed(0) + 'ms  screenshot=' + (tShot / _cap).toFixed(0) + 'ms  ' + (FRAMES_DIR ? 'fileWrite=' : 'pipeWrite=') + (tWrite / _cap).toFixed(0) + 'ms');
   console.log('[VT] FORMAT=' + FORMAT + (FORMAT === 'jpeg' ? '(q' + JPEG_Q + ')' : '') + '  PRESET=' + (PRESET || '(default)') + '  CRF=' + CRF);
   console.log('[VT] ' + (FRAMES_DIR ? ('shard ' + SHARD + ' done -> ' + _cap + ' frames') : ('done -> ' + OUT)));
-})().catch(e => { console.error('\n[VT] 失敗:', e && e.stack || e); process.exit(1); });
+  console.log('RENDERER2_METRICS ' + JSON.stringify({
+    shard: SHARD,
+    shards: SHARDS,
+    startFrame: startF,
+    endFrame: endF,
+    frames: _cap,
+    preRollFrames: preRollFrames,
+    launchMs: browserReadyAt - workerStartedAt,
+    bootMs: bootReadyAt - navigationStartedAt,
+    warmupMs: warmupReadyAt - bootReadyAt,
+    preRollMs: preRollReadyAt - preRollStartedAt,
+    captureMs: Math.round(_elapsed * 1000),
+    totalMs: Date.now() - workerStartedAt,
+    avgStepMs: Number((tStep / _cap).toFixed(1)),
+    avgScreenshotMs: Number((tShot / _cap).toFixed(1)),
+    avgWriteMs: Number((tWrite / _cap).toFixed(1)),
+  }));
+})().catch(e => { disarmStartupGuard(); console.error('\n[VT] 失敗:', e && e.stack || e); process.exit(1); });

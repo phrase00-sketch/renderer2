@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 — 2026-08-30
+
+- Detect heavy-WebGL multi-worker stages that produce no first frame within 100 seconds and step down early.
+- Collapse the final retry into one full-deck browser when every shard stalls at both four and two workers, avoiding repeated browser startup and scene pre-roll.
+- Report per-shard launch, boot, pre-roll, capture, screenshot, and frame-write timing to expose stragglers.
+- Validate the startup watchdog timeout and keep successful partial ranges for ordinary shard failures.
+
 ## 1.2.0 — 2026-08-30
 
 - Start heavy Three.js / WebGL virtual-time decks with four capture workers.

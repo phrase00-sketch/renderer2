@@ -35,4 +35,20 @@ assert.strictEqual(profile.protocolTimeout, 180000);
 assert.strictEqual(profile.retryProtocolTimeout, 300000);
 assert.deepStrictEqual(profile.retryConcurrency, [2, 1]);
 
+const invalidEnv = {
+  ...env,
+  STARTUP_STALL_TIMEOUT: 'not-a-number',
+};
+const invalidResult = spawnSync(process.execPath, [path.join(root, 'capture-parallel.js'), fixture], {
+  cwd: root,
+  env: invalidEnv,
+  encoding: 'utf8',
+});
+assert.notStrictEqual(invalidResult.status, 0, 'Invalid startup watchdog timeout must be rejected.');
+assert.match(
+  (invalidResult.stdout || '') + (invalidResult.stderr || ''),
+  /STARTUP_STALL_TIMEOUT.*0.*900000/,
+  'Invalid timeout error should name the accepted range.'
+);
+
 console.log('Heavy WebGL render profile test passed.');
