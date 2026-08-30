@@ -1,4 +1,6 @@
-// RENDERER2 capture-parallel v4.12 OSS（並列キャプチャ・オーケストレータ）
+// RENDERER2 capture-parallel v4.13 OSS（並列キャプチャ・オーケストレータ）
+// - v4.13 OSS: VTのThree.js/WebGLデッキは4並列で開始し、失敗区間だけを
+//              2並列、最後に1並列＋長いPuppeteer制限時間で段階再試行する。
 // - v4.12 OSS: VTのThree.js/WebGLデッキは未指定時の並列数を1へ自動調整し、
 //              失敗したシャードだけを長いPuppeteer制限時間で直列再試行する。
 // - v4.11 OSS: 実行ごとに固有のフレーム一時フォルダを作り、並行実行時の衝突と
@@ -16,13 +18,14 @@
 //         （音声は各動画のシーン開始時刻に配置。loop属性の動画はシーン尺まで音声も反復。
 //          動画音声の音量: VIDVOL=0.8 等 ／ 検出結果表示: VIDAUDIO_DEBUG=1）
 // 使い方: node capture-parallel.js "デッキ.dc.html"
-// 環境変数: CONC=並列数(既定4、重いVTは自動1) FORMAT=jpeg(既定) JPEG_Q=92 FPS=30 CRF=16 PRESET= OUT=deck.mp4
+// 環境変数: CONC=初回並列数(既定4、重いVTは失敗時2→1へ自動縮退) FORMAT=jpeg(既定) JPEG_Q=92 FPS=30 CRF=16 PRESET= OUT=deck.mp4
 //              PORT=8800(基準) KEEP_FRAMES=1 PROTO_TIMEOUT=ms RETRY_PROTO_TIMEOUT=ms RETRY_FAILED_SHARDS=0|1
 // 各ワーカー(capture-deck2.js)が担当フレーム区間を FRAMES_DIR に書き出し、最後に親が1回だけ ffmpeg で結合＋音声合成する。
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
+const { captureWithFallback } = require('./scripts/adaptive-retry');
 
 let DECK = process.argv[2];
 if (!DECK) {
@@ -112,7 +115,7 @@ function finiteNumber(name, fallback, min, max) {
   return value;
 }
 const CONC_WAS_SET = process.env.CONC != null && String(process.env.CONC).trim() !== '';
-const CONC = Math.floor(finiteNumber('CONC', HEAVY_WEBGL ? 1 : 4, 1, 32));
+const CONC = Math.floor(finiteNumber('CONC', 4, 1, 32));
 const FPS = finiteNumber('FPS', 30, 1, 120);
 const CRF = String(Math.floor(finiteNumber('CRF', 16, 0, 51)));
 const FORMAT = (process.env.FORMAT || 'jpeg').toLowerCase();
@@ -316,6 +319,7 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
       concurrencySource: CONC_WAS_SET ? 'explicit' : 'automatic',
       protocolTimeout: PROTOCOL_TIMEOUT,
       retryProtocolTimeout: RETRY_PROTO_TIMEOUT,
+      retryConcurrency: HEAVY_WEBGL && CONC > 2 ? [2, 1] : [1],
     },
   }));
   process.exit(0);
@@ -344,7 +348,7 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     process.stdout.write('\r  capturing... ' + n + ' frames  ' + el + 's   ');
   }, 2000);
 
-  function runShard(s, isRetry) {
+  function runShard(s, stage) {
     const env = Object.assign({}, process.env, {
       SHARDS: String(CONC),
       SHARD: String(s),
@@ -354,10 +358,11 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
       FPS: String(FPS),
       PORT: String(BASEPORT + s),
       NOAUDIO: '1',
-      PROTO_TIMEOUT: String(isRetry ? RETRY_PROTO_TIMEOUT : PROTOCOL_TIMEOUT),
+      PROTO_TIMEOUT: String(stage.timeout),
     });
-    if (isRetry) {
-      console.log('\n  再試行: shard ' + s + '/' + CONC + ' / PROTO_TIMEOUT=' + env.PROTO_TIMEOUT + 'ms');
+    if (stage.name !== 'initial') {
+      console.log('\n  再試行(' + stage.concurrency + '並列): shard ' + s + '/' + CONC
+        + ' / PROTO_TIMEOUT=' + env.PROTO_TIMEOUT + 'ms');
     }
     const p = spawn(process.execPath, [worker, DECK_ABS], { env: env, stdio: ['ignore', 'ignore', 'inherit'] });
     return new Promise(function (resolve) {
@@ -372,20 +377,25 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
     });
   }
 
-  const firstPass = [];
-  for (let s = 0; s < CONC; s++) firstPass.push(runShard(s, false));
-  const firstResults = await Promise.all(firstPass);
-  let failed = firstResults.filter(function (result) { return result.code !== 0; });
-
-  if (failed.length && RETRY_FAILED_SHARDS) {
-    console.log('\n初回キャプチャで ' + failed.length + ' 区間が失敗。失敗区間だけを1本ずつ再試行します。');
-    const retryFailures = [];
-    for (const result of failed) {
-      const retried = await runShard(result.shard, true);
-      if (retried.code !== 0) retryFailures.push(retried);
-    }
-    failed = retryFailures;
-  }
+  const failed = await captureWithFallback({
+    shards: Array.from({ length: CONC }, function (_, index) { return index; }),
+    initialConcurrency: CONC,
+    protocolTimeout: PROTOCOL_TIMEOUT,
+    retryProtocolTimeout: RETRY_PROTO_TIMEOUT,
+    retryEnabled: RETRY_FAILED_SHARDS,
+    adaptive: HEAVY_WEBGL,
+    runShard: runShard,
+    onStage: function (stage) {
+      if (stage.name === 'adaptive') {
+        console.log('\n初回キャプチャで ' + stage.shards.length + ' 区間が失敗。'
+          + '成功済みフレームを残し、失敗区間だけを最大2並列で再試行します。');
+      } else if (stage.name === 'final') {
+        const lead = HEAVY_WEBGL && CONC > 2 ? '2並列での再試行後も ' : '初回キャプチャで ';
+        console.log('\n' + lead + stage.shards.length + ' 区間が未完了。'
+          + '失敗区間だけを1本ずつ、長い通信待ち時間で最終再試行します。');
+      }
+    },
+  });
 
   if (failed.length) {
     const detail = failed.map(function (result) {

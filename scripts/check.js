@@ -11,6 +11,9 @@ const files = [
   'vt-probe.js',
   'scripts/render-vt.js',
   'scripts/smoke-test.js',
+  'scripts/adaptive-retry.js',
+  'scripts/adaptive-retry-test.js',
+  'scripts/render-profile-test.js',
 ];
 
 for (const file of files) {

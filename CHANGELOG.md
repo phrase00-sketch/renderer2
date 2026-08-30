@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 2026-08-30
+
+- Start heavy Three.js / WebGL virtual-time decks with four capture workers.
+- Step failed heavy-WebGL shards down from four workers to at most two, then one with the extended protocol timeout.
+- Preserve successful frame ranges across every retry stage and keep manual 1 / 2 / 4 initial-concurrency choices available.
+- Add deterministic retry-policy tests, heavy-WebGL profile coverage, and a synthetic WebGL smoke fixture.
+
 ## 1.1.0 — 2026-08-28
 
 - Detect Three.js and heavy WebGL virtual-time decks and default them to one capture worker.

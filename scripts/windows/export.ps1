@@ -155,7 +155,7 @@ function Get-RenderProfile([string]$DeckPath, [string]$Mode) {
   if ($hits.Count -gt 0) {
     return [pscustomobject]@{
       Name = 'heavy WebGL / 3D'
-      Concurrency = 1
+      Concurrency = 4
       ProtocolTimeout = 180000
       Reason = (($hits | Select-Object -Unique) -join ', ')
     }
@@ -234,7 +234,8 @@ try {
 
       Write-Host "RENDERER2: $sourceFull"
       Write-Host "mode=$mode  load=$($profile.Name) ($($profile.Reason))"
-      Write-Host "CONC=$concurrency  PROTO_TIMEOUT=$($profile.ProtocolTimeout)ms  output=$output"
+      $fallback = if ($profile.Name -eq 'heavy WebGL / 3D' -and $concurrency -gt 2) { ' -> 2 -> 1 on failure' } else { ' -> 1 on failure' }
+      Write-Host "CONC=$concurrency$fallback  PROTO_TIMEOUT=$($profile.ProtocolTimeout)ms  output=$output"
       & node $renderer $resolved.Deck
       if ($LASTEXITCODE -ne 0) { throw "レンダラーがコード $LASTEXITCODE で終了しました。" }
       $results += [pscustomobject]@{ Source = $sourceFull; Output = $output; Success = $true }
