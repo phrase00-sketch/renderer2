@@ -14,6 +14,7 @@ const files = [
   'scripts/adaptive-retry.js',
   'scripts/adaptive-retry-test.js',
   'scripts/render-profile-test.js',
+  'scripts/manifest-mode-test.js',
   'scripts/webgl-readiness-test.js',
   'scripts/webgl-context-loss-test.js',
 ];

@@ -89,18 +89,24 @@ function Resolve-Deck([string]$SourcePath) {
 
   if ($extension -ne '.zip') {
     if ($sourceFull -notmatch '(?i)\.html$') { throw "ZIPまたはHTMLを指定してください: $sourceFull" }
-    return [pscustomobject]@{ Deck = $sourceFull; Temp = $null }
+    return [pscustomobject]@{ Deck = $sourceFull; Temp = $null; RenderMode = $null }
   }
 
   $temp = Join-Path $tempRoot ('renderer2-' + [Guid]::NewGuid().ToString('N'))
-  New-Item -ItemType Directory -LiteralPath $temp | Out-Null
+  New-Item -ItemType Directory -Path $temp | Out-Null
   Expand-Archive -LiteralPath $sourceFull -DestinationPath $temp
 
   $deck = $null
+  $manifestRenderMode = $null
   $manifestPath = Join-Path $temp 'manifest.json'
   if (Test-Path -LiteralPath $manifestPath) {
     try {
       $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($manifest.renderMode) {
+        $candidateMode = ([string]$manifest.renderMode).ToLowerInvariant()
+        if ($candidateMode -notin @('css', 'vt')) { throw 'manifest.json のrenderModeはcssまたはvtで指定してください。' }
+        $manifestRenderMode = $candidateMode
+      }
       if ($manifest.deck) {
         $candidate = [IO.Path]::GetFullPath((Join-Path $temp ([string]$manifest.deck)))
         if (-not (Test-PathInside $temp $candidate)) { throw 'manifest.json のdeck指定が展開先の外を指しています。' }
@@ -118,7 +124,7 @@ function Resolve-Deck([string]$SourcePath) {
     $deck = $decks[0].FullName
   }
 
-  return [pscustomobject]@{ Deck = $deck; Temp = $temp }
+  return [pscustomobject]@{ Deck = $deck; Temp = $temp; RenderMode = $manifestRenderMode }
 }
 
 function Remove-SafeTemp([string]$TempPath) {
@@ -214,7 +220,7 @@ try {
         $save.FileName
       }
 
-      $mode = Get-RenderMode $resolved.Deck
+      $mode = if ($resolved.RenderMode) { $resolved.RenderMode } else { Get-RenderMode $resolved.Deck }
       $profile = Get-RenderProfile $resolved.Deck $mode
       $concurrency = $profile.Concurrency
       if (-not [string]::IsNullOrWhiteSpace($env:RENDERER2_CONC)) {

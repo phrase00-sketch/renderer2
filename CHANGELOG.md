@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0 — 2026-08-31
+
+- Treat CDE2 `manifest.json` `renderMode` as the authoritative CSS / virtual-time selection for ZIP inputs.
+- Keep `data-render-mode` and source inspection as the fallback for direct HTML and older packages.
+- Add a regression that resolves a ZIP whose WebGL implementation is hidden behind a module graph and confirms the manifest still selects virtual time.
+- Keep ZIP extraction compatible with Windows PowerShell 5.1 by using the supported `New-Item -Path` form.
+
 ## 1.5.0 — 2026-08-31
 
 - Reject heavy-WebGL workers that reach capture without creating a WebGL context instead of accepting text-only output.
