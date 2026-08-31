@@ -1,4 +1,5 @@
-// RENDERER2 capture-parallel v4.14 OSS（並列キャプチャ・オーケストレータ）
+// RENDERER2 capture-parallel v4.15 OSS（並列キャプチャ・オーケストレータ）
+// - v4.15 OSS: WebGLコンテキスト喪失を失敗区間として扱い、2→1の段階再試行へ渡す。
 // - v4.14 OSS: 重いWebGLで最初のフレームが一定時間出ない並列段階を早期終了し、
 //              4→2の全ワーカーが起動停止した場合はデッキ全体を1ブラウザへ統合する。
 //              ワーカー別の起動・pre-roll・capture時間も終了時に表示する。
@@ -371,6 +372,7 @@ if (process.env.AUDIO_SCAN_ONLY === '1') {
       NOAUDIO: '1',
       PROTO_TIMEOUT: String(stage.timeout),
       STARTUP_STALL_TIMEOUT: String(stage.concurrency > 1 ? STARTUP_STALL_TIMEOUT : 0),
+      WEBGL_CONTEXT_GUARD: String(VT && HEAVY_WEBGL ? 1 : 0),
     });
     if (stage.name !== 'initial') {
       console.log('\n  retry (' + stage.concurrency + ' worker): ' + (collapsed ? 'all ranges collapsed into one worker' : ('shard ' + s + '/' + CONC))

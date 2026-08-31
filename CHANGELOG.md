@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 — 2026-08-31
+
+- Detect WebGL context loss inside heavy virtual-time workers instead of accepting later black frames as successful JPEG output.
+- Route context-lost shards through the existing 4 → 2 → 1 adaptive retry path while preserving successful ranges.
+- Add a real Chromium regression fixture that forces `WEBGL_lose_context` and verifies that no MP4 is emitted.
+
 ## 1.3.0 — 2026-08-30
 
 - Detect heavy-WebGL multi-worker stages that produce no first frame within 100 seconds and step down early.

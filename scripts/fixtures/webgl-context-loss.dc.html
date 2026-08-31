@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RENDERER2 WebGL context-loss fixture</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #050914; }
+    body { display: grid; place-items: center; }
+    .stage { position: relative; width: 320px; height: 320px; overflow: hidden; }
+    canvas { display: block; width: 320px; height: 320px; }
+    input { position: fixed; opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <main class="stage" data-cde-stage="1" data-duration="0.3" data-render-mode="vt">
+    <canvas width="320" height="320"></canvas>
+  </main>
+  <input type="range" min="0" max="0.3" step="0.001" value="0">
+  <script>
+    const BOUNDS = [0];
+    const duration = 0.3;
+    const canvas = document.querySelector('canvas');
+    const slider = document.querySelector('input');
+    const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
+    const lose = gl.getExtension('WEBGL_lose_context');
+    let forced = false;
+    function draw() {
+      const t = Number(slider.value || 0);
+      if (!forced && t >= 0.1) {
+        forced = true;
+        if (!lose) throw new Error('WEBGL_lose_context is unavailable');
+        lose.loseContext();
+        return;
+      }
+      gl.clearColor(0.1, 0.3, 0.7, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    slider.addEventListener('input', draw);
+    function tick() { draw(); requestAnimationFrame(tick); }
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

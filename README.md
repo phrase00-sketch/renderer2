@@ -21,6 +21,7 @@ CDE2が「AI生成物を自分で直す編集台」なら、RENDERER2はその�
 - CDE2のシーン境界、動画イン点 `data-vin`、ナレーション、BGMへの対応
 - `<video data-audio="1">` と `<audio>` の音声合成
 - 実行ごとに固有の一時フォルダを使う安全な並行実行
+- 重いWebGLでコンテキストが失われた区間を検出し、黒いフレームを完成扱いせず自動再試行
 - Windows向けのファイル選択・ZIP展開・自動判定ランチャー
 
 ### 必要なもの
@@ -58,7 +59,7 @@ Canvas、WebGL、rAF、タイマーを使うデッキは仮想時間方式を使
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキ本体と同一パッケージ内のローカルスクリプトから自動判定します。通常のCSS / VTデッキも、Three.jsや重いWebGLを検出したVTデッキも、まず4並列でキャプチャします。重いWebGLで区間が失敗した場合は、成功済みフレームを残したまま失敗区間だけを最大2並列、最後に1並列＋長い通信待ち時間で段階的に再試行します。全ワーカーが最初のフレームを100秒間作れない段階は早期終了し、4並列と2並列の両方が起動停止した場合は、デッキ全体を1ブラウザへ統合して再試行します。4並列で完走するデッキには再試行の待ち時間は加わりません。
+Windowsランチャーは `data-render-mode="css|vt"` の明示指定を優先し、指定がなければデッキ本体と同一パッケージ内のローカルスクリプトから自動判定します。通常のCSS / VTデッキも、Three.jsや重いWebGLを検出したVTデッキも、まず4並列でキャプチャします。重いWebGLで区間が失敗した場合や、ブラウザがWebGLコンテキスト喪失を報告した場合は、成功済みフレームを残したまま失敗区間だけを最大2並列、最後に1並列＋長い通信待ち時間で段階的に再試行します。全ワーカーが最初のフレームを100秒間作れない段階は早期終了し、4並列と2並列の両方が起動停止した場合は、デッキ全体を1ブラウザへ統合して再試行します。4並列で完走するデッキには再試行の待ち時間は加わりません。
 
 ### 主な設定
 
@@ -107,6 +108,7 @@ If CDE2 is the editing desk where an AI-generated result is finished by hand, RE
 - CDE2 scene boundaries, `data-vin`, narration, and BGM support
 - Audio composition from `<video data-audio="1">` and `<audio>` elements
 - Unique per-run temporary frame directories
+- WebGL context-loss detection so visually broken shards retry instead of passing as black output
 - Optional Windows launcher for ZIP extraction, mode detection, and output selection
 
 ### Requirements and quick start
@@ -130,7 +132,7 @@ Use the virtual-time path for Canvas, WebGL, rAF, or timer-driven decks:
 npm run render:vt -- "path/to/deck.dc.html"
 ```
 
-On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. The launcher inspects the deck and local scripts inside the same package. Heavy Three.js / WebGL virtual-time decks start with four Chromium workers. If a capture shard fails, completed frames remain in place while only failed shards step down to at most two workers, then one worker with a longer protocol timeout. A multi-worker stage that produces no first frame for 100 seconds exits early; if every worker stalls at both four and two workers, the final retry captures the full deck in one browser instead of paying four separate browser startups. Decks that complete at four workers pay no retry cost. Standard CSS and virtual-time decks retain the four-worker default and sequential failed-shard retry. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
+On Windows, double-click `renderer2-windows.bat` to select a CDE2 renderer ZIP or HTML deck. The launcher inspects the deck and local scripts inside the same package. Heavy Three.js / WebGL virtual-time decks start with four Chromium workers. If a capture shard fails or reports a lost WebGL context, completed frames remain in place while only failed shards step down to at most two workers, then one worker with a longer protocol timeout. A multi-worker stage that produces no first frame for 100 seconds exits early; if every worker stalls at both four and two workers, the final retry captures the full deck in one browser instead of paying four separate browser startups. Decks that complete at four workers pay no retry cost. Standard CSS and virtual-time decks retain the four-worker default and sequential failed-shard retry. On macOS and Linux, extract a ZIP and pass its `.dc.html` file to the command above.
 
 The main environment variables are `CONC`, `FPS`, `CRF`, `FORMAT`, `JPEG_Q`, `PRESET`, `OUT`, `VT`, `NOAUDIO`, `VIDAUDIO`, `KEEP_FRAMES`, `PROTO_TIMEOUT`, `STARTUP_STALL_TIMEOUT`, `RETRY_PROTO_TIMEOUT`, `RETRY_FAILED_SHARDS`, and `PUPPETEER_EXECUTABLE_PATH`. `CONC` sets the initial command-line worker count; set `RENDERER2_CONC=1..32` to override the Windows launcher. For heavy WebGL, choosing 1, 2, or 4 produces a 1, 2→1, or 4→2→1 path. `STARTUP_STALL_TIMEOUT` defaults to 100000 milliseconds for heavy WebGL multi-worker stages and accepts `0` to disable the startup watchdog. The current final encoding path uses FFmpeg `libx264`, so export speed depends on CPU, storage, browser capture, and concurrency rather than GPU encoding alone.
 

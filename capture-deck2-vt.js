@@ -1,4 +1,5 @@
-// RENDERER2 capture v4.12 OSS (virtual-time VT worker)
+// RENDERER2 capture v4.13 OSS (virtual-time VT worker)
+// - v4.13 OSS: WebGLコンテキスト喪失を検出し、黒いJPEGを成功扱いせず段階再試行へ返す。
 // - v4.12 OSS: 最初のフレームが出ないワーカーの起動監視と、段階別の性能計測を追加。
 // - v4.11 OSS: ローカル配信用のパス境界検証と入力ファイル検証を追加。
 // - v4.10: <video data-vin="秒"> をCDE2と同じ意味の素材開始位置として反映（2026-08-04）
@@ -119,6 +120,7 @@ function boundedTimeoutFromEnv(name, fallback) {
   return Math.floor(value);
 }
 const STARTUP_STALL_TIMEOUT = boundedTimeoutFromEnv('STARTUP_STALL_TIMEOUT', 0);
+const WEBGL_CONTEXT_GUARD = process.env.WEBGL_CONTEXT_GUARD === '1';
 let activeBrowser = null;
 let activeServer = null;
 let startupGuard = null;
@@ -312,6 +314,32 @@ function sceneIndexOf(T) {
   page.on('console', m => { if (m.type() === 'error') console.log('[page-error]', m.text()); });
   await page.setViewport({ width: 1920, height: 1160, deviceScaleFactor: 1 });
   await page.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch (e) {} });
+  if (WEBGL_CONTEXT_GUARD) {
+    await page.evaluateOnNewDocument(() => {
+      const nativeGetContext = HTMLCanvasElement.prototype.getContext;
+      const contexts = [];
+      let lostEvents = 0;
+      HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+        const context = nativeGetContext.call(this, type, ...args);
+        const kind = String(type || '').toLowerCase();
+        if (context && (kind === 'webgl' || kind === 'webgl2') && !contexts.includes(context)) {
+          contexts.push(context);
+          this.addEventListener('webglcontextlost', () => { lostEvents++; });
+        }
+        return context;
+      };
+      Object.defineProperty(window, '__renderer2WebGLHealth', {
+        configurable: false,
+        value: () => ({
+          contexts: contexts.length,
+          lostEvents,
+          contextLost: contexts.some((context) => {
+            try { return context.isContextLost(); } catch (e) { return true; }
+          }),
+        }),
+      });
+    });
+  }
   if (USE_CLOCK_BRIDGE) {
     // ブート用に仮想時間を進めても、デッキのシーン時計は0秒に留める。
     // 各frameStep直前に出力時刻へ設定するため、シャードごとの実行順に依存しない。
@@ -607,6 +635,13 @@ function sceneIndexOf(T) {
     await advance(frameMs);
     await freezeCssAnims(T);
     await syncVideos(T);
+    if (WEBGL_CONTEXT_GUARD) {
+      const health = await page.evaluate(() => typeof window.__renderer2WebGLHealth === 'function'
+        ? window.__renderer2WebGLHealth() : { contexts: 0, lostEvents: 0, contextLost: false });
+      if (health.contextLost || health.lostEvents > 0) {
+        throw new Error('WEBGL_CONTEXT_LOST contexts=' + health.contexts + ' events=' + health.lostEvents);
+      }
+    }
   }
 
   // stage 位置（撮影クリップ）
