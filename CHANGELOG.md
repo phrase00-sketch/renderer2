@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 — 2026-08-31
+
+- Reject heavy-WebGL workers that reach capture without creating a WebGL context instead of accepting text-only output.
+- Add the optional versioned `window.__RENDERER2_STATUS__` contract for explicit `booting`, `ready`, and `error` states.
+- Require contract-aware decks to finish one real render before reporting ready, while keeping a context-based fallback for existing decks.
+- Add real-Chromium regressions for swallowed boot failures, explicit boot errors, delayed readiness, and valid near-black WebGL output.
+
 ## 1.4.0 — 2026-08-31
 
 - Detect WebGL context loss inside heavy virtual-time workers instead of accepting later black frames as successful JPEG output.

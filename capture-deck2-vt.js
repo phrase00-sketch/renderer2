@@ -1,4 +1,5 @@
-// RENDERER2 capture v4.13 OSS (virtual-time VT worker)
+// RENDERER2 capture v4.14 OSS (virtual-time VT worker)
+// - v4.14 OSS: WebGLの初回boot失敗とcontext未生成をready契約＋後方互換ガードで検出する。
 // - v4.13 OSS: WebGLコンテキスト喪失を検出し、黒いJPEGを成功扱いせず段階再試行へ返す。
 // - v4.12 OSS: 最初のフレームが出ないワーカーの起動監視と、段階別の性能計測を追加。
 // - v4.11 OSS: ローカル配信用のパス境界検証と入力ファイル検証を追加。
@@ -121,6 +122,7 @@ function boundedTimeoutFromEnv(name, fallback) {
 }
 const STARTUP_STALL_TIMEOUT = boundedTimeoutFromEnv('STARTUP_STALL_TIMEOUT', 0);
 const WEBGL_CONTEXT_GUARD = process.env.WEBGL_CONTEXT_GUARD === '1';
+const WEBGL_READY_TIMEOUT = boundedTimeoutFromEnv('WEBGL_READY_TIMEOUT', 15000);
 let activeBrowser = null;
 let activeServer = null;
 let startupGuard = null;
@@ -319,9 +321,14 @@ function sceneIndexOf(T) {
       const nativeGetContext = HTMLCanvasElement.prototype.getContext;
       const contexts = [];
       let lostEvents = 0;
+      let contextRequests = 0;
+      let nullContexts = 0;
       HTMLCanvasElement.prototype.getContext = function (type, ...args) {
-        const context = nativeGetContext.call(this, type, ...args);
         const kind = String(type || '').toLowerCase();
+        const isWebGL = kind === 'webgl' || kind === 'webgl2';
+        if (isWebGL) contextRequests++;
+        const context = nativeGetContext.call(this, type, ...args);
+        if (isWebGL && !context) nullContexts++;
         if (context && (kind === 'webgl' || kind === 'webgl2') && !contexts.includes(context)) {
           contexts.push(context);
           this.addEventListener('webglcontextlost', () => { lostEvents++; });
@@ -332,6 +339,8 @@ function sceneIndexOf(T) {
         configurable: false,
         value: () => ({
           contexts: contexts.length,
+          contextRequests,
+          nullContexts,
           lostEvents,
           contextLost: contexts.some((context) => {
             try { return context.isContextLost(); } catch (e) { return true; }
@@ -627,6 +636,90 @@ function sceneIndexOf(T) {
     });
   }
 
+  async function readWebGLSnapshot() {
+    return page.evaluate(() => {
+      const health = typeof window.__renderer2WebGLHealth === 'function'
+        ? window.__renderer2WebGLHealth()
+        : { contexts: 0, contextRequests: 0, nullContexts: 0, lostEvents: 0, contextLost: false };
+      let status = null;
+      try {
+        const raw = window.__RENDERER2_STATUS__;
+        if (raw && typeof raw === 'object') {
+          const err = raw.error && typeof raw.error === 'object' ? raw.error : null;
+          status = {
+            version: Number(raw.version) || 0,
+            kind: String(raw.kind || ''),
+            state: String(raw.state || ''),
+            frameSerial: Number(raw.frameSerial) || 0,
+            lastRenderedTime: Number.isFinite(Number(raw.lastRenderedTime)) ? Number(raw.lastRenderedTime) : null,
+            error: err ? {
+              name: String(err.name || 'Error'),
+              message: String(err.message || ''),
+              stack: String(err.stack || '').slice(0, 2000),
+            } : (raw.error == null ? null : { name: 'Error', message: String(raw.error), stack: '' }),
+          };
+        }
+      } catch (error) {
+        status = { version: 0, kind: 'webgl', state: 'error', frameSerial: 0,
+          lastRenderedTime: null, error: { name: 'StatusReadError', message: String(error), stack: '' } };
+      }
+      return { health, status };
+    });
+  }
+
+  function assertWebGLNotFailed(snapshot) {
+    const health = snapshot.health || {};
+    const status = snapshot.status;
+    if (health.contextLost || health.lostEvents > 0) {
+      throw new Error('WEBGL_CONTEXT_LOST contexts=' + (health.contexts || 0)
+        + ' events=' + (health.lostEvents || 0));
+    }
+    if (status && status.kind === 'webgl') {
+      if (status.version < 1 || !['booting', 'ready', 'error'].includes(status.state)) {
+        throw new Error('WEBGL_STATUS_INVALID ' + JSON.stringify(status));
+      }
+      if (status.state === 'error') {
+        throw new Error('WEBGL_BOOT_ERROR ' + JSON.stringify(status.error || {}));
+      }
+      if (status.state === 'ready' && !(health.contexts > 0)) {
+        throw new Error('WEBGL_NOT_INITIALIZED contexts=0 status=ready');
+      }
+      if (status.state === 'ready' && !(status.frameSerial > 0)) {
+        throw new Error('WEBGL_NOT_RENDERED frameSerial=' + status.frameSerial);
+      }
+    }
+  }
+
+  async function waitForWebGLReady(T) {
+    const started = Date.now();
+    let snapshot = null;
+    while (true) {
+      snapshot = await readWebGLSnapshot();
+      assertWebGLNotFailed(snapshot);
+      const health = snapshot.health || {};
+      const status = snapshot.status;
+      if (status && status.kind === 'webgl' && status.state === 'ready') {
+        console.log('[VT] WEBGL READY contract=v' + status.version + ' contexts=' + health.contexts
+          + ' frameSerial=' + status.frameSerial);
+        return;
+      }
+      if ((!status || status.kind !== 'webgl') && health.contexts > 0) {
+        console.log('[VT] WEBGL READY legacy contexts=' + health.contexts);
+        return;
+      }
+      if (Date.now() - started >= WEBGL_READY_TIMEOUT) {
+        throw new Error('WEBGL_NOT_INITIALIZED contexts=' + (health.contexts || 0)
+          + ' requests=' + (health.contextRequests || 0)
+          + ' null=' + (health.nullContexts || 0)
+          + ' status=' + (status ? status.state || 'invalid' : 'absent')
+          + ' timeout=' + WEBGL_READY_TIMEOUT + 'ms');
+      }
+      await setSlider(T);
+      await advance(Math.max(1, Math.min(frameMs, 50)));
+      await sleep(25);
+    }
+  }
+
   // one frame step: position slider for time T, advance the clock 1 frame so
   // React commits + rAF/canvas/timers fire, then pin CSS/WAAPI anims to the
   // exact scene-relative time (same as the known-good getAnimations method).
@@ -636,16 +729,13 @@ function sceneIndexOf(T) {
     await freezeCssAnims(T);
     await syncVideos(T);
     if (WEBGL_CONTEXT_GUARD) {
-      const health = await page.evaluate(() => typeof window.__renderer2WebGLHealth === 'function'
-        ? window.__renderer2WebGLHealth() : { contexts: 0, lostEvents: 0, contextLost: false });
-      if (health.contextLost || health.lostEvents > 0) {
-        throw new Error('WEBGL_CONTEXT_LOST contexts=' + health.contexts + ' events=' + health.lostEvents);
-      }
+      assertWebGLNotFailed(await readWebGLSnapshot());
     }
   }
 
   // stage 位置（撮影クリップ）
   await frameStep(0);
+  if (WEBGL_CONTEXT_GUARD) await waitForWebGLReady(0);
   const rect = await page.evaluate(() => {
     const st = document.querySelector('.stage') || Array.from(document.querySelectorAll('div'))
       .find(d => /^\d+px$/.test(d.style.width) && /^\d+px$/.test(d.style.height) && parseInt(d.style.width) >= 320 && parseInt(d.style.height) >= 320);

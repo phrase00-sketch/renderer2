@@ -1,6 +1,6 @@
 {
   "name": "@phrase00-sketch/renderer2",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Deterministic local MP4 renderer for CDE2 and compatible HTML motion-design decks.",
   "private": true,
   "type": "commonjs",
@@ -8,7 +8,7 @@
     "render": "node capture-parallel.js",
     "render:vt": "node scripts/render-vt.js",
     "check": "node scripts/check.js",
-    "test:adaptive": "node scripts/adaptive-retry-test.js && node scripts/render-profile-test.js && node scripts/webgl-context-loss-test.js",
+    "test:adaptive": "node scripts/adaptive-retry-test.js && node scripts/render-profile-test.js && node scripts/webgl-readiness-test.js && node scripts/webgl-context-loss-test.js",
     "test": "node scripts/smoke-test.js",
     "test:vt": "node scripts/smoke-test.js --vt"
   },

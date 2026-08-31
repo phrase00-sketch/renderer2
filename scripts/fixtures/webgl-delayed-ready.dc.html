@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RENDERER2 delayed-ready WebGL fixture</title>
+  <style>
+    html, body { margin: 0; background: #050914; }
+    .stage { width: 320px; height: 320px; overflow: hidden; }
+    canvas { display: block; width: 320px; height: 320px; }
+    input { position: fixed; opacity: 0; }
+  </style>
+</head>
+<body>
+  <main class="stage" data-cde-stage="1" data-duration="0.2" data-render-mode="vt">
+    <canvas width="320" height="320"></canvas>
+  </main>
+  <input type="range" min="0" max="0.2" step="0.001" value="0">
+  <script>
+    const BOUNDS = [0];
+    const duration = 0.2;
+    const status = window.__RENDERER2_STATUS__ = {
+      version: 1,
+      kind: 'webgl',
+      state: 'booting',
+      error: null,
+      frameSerial: 0,
+      lastRenderedTime: null,
+    };
+    try {
+      const gl = document.querySelector('canvas').getContext('webgl', { preserveDrawingBuffer: true });
+      if (!gl) throw new Error('WebGL unavailable');
+      const slider = document.querySelector('input');
+      let enabled = false;
+      function draw() {
+        if (!enabled) return;
+        const t = Number(slider.value || 0);
+        gl.clearColor(0.05, 0.18, 0.42, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        status.frameSerial += 1;
+        status.lastRenderedTime = t;
+        status.state = 'ready';
+      }
+      slider.addEventListener('input', draw);
+      setTimeout(() => { enabled = true; draw(); }, 10000);
+    } catch (error) {
+      status.state = 'error';
+      status.error = { name: error.name, message: error.message, stack: error.stack || '' };
+    }
+  </script>
+</body>
+</html>

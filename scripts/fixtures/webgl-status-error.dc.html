@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RENDERER2 WebGL status-error fixture</title>
+  <style>
+    html, body { margin: 0; background: #09101a; }
+    .stage { position: relative; width: 320px; height: 320px; overflow: hidden; color: white; }
+    input { position: fixed; opacity: 0; }
+  </style>
+</head>
+<body>
+  <main class="stage" data-cde-stage="1" data-duration="0.2" data-render-mode="vt">BOOT ERROR</main>
+  <input type="range" min="0" max="0.2" step="0.001" value="0">
+  <script>
+    const BOUNDS = [0];
+    const duration = 0.2;
+    window.__RENDERER2_STATUS__ = {
+      version: 1,
+      kind: 'webgl',
+      state: 'booting',
+      error: null,
+      frameSerial: 0,
+      lastRenderedTime: null,
+    };
+    try {
+      throw new Error('Synthetic renderer boot error');
+    } catch (error) {
+      window.__RENDERER2_STATUS__.state = 'error';
+      window.__RENDERER2_STATUS__.error = {
+        name: error.name,
+        message: error.message,
+        stack: error.stack || '',
+      };
+      console.error('[fixture] explicit boot error', error);
+    }
+  </script>
+</body>
+</html>

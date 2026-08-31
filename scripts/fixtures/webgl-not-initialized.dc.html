@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RENDERER2 WebGL not-initialized fixture</title>
+  <style>
+    html, body { margin: 0; background: #09101a; }
+    .stage { position: relative; width: 320px; height: 320px; overflow: hidden; }
+    canvas { display: block; width: 320px; height: 320px; }
+    input { position: fixed; opacity: 0; }
+  </style>
+</head>
+<body>
+  <main class="stage" data-cde-stage="1" data-duration="0.2" data-render-mode="vt">
+    <canvas width="320" height="320"></canvas>
+    <strong style="position:absolute;inset:0;display:grid;place-items:center;color:white">TEXT ONLY</strong>
+  </main>
+  <input type="range" min="0" max="0.2" step="0.001" value="0">
+  <script>
+    const BOUNDS = [0];
+    const duration = 0.2;
+    const nativeGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+      if (/^webgl2?$/.test(String(type || '').toLowerCase())) return null;
+      return nativeGetContext.call(this, type, ...args);
+    };
+    try {
+      const gl = document.querySelector('canvas').getContext('webgl');
+      if (!gl) throw new Error('Synthetic WebGL boot failure');
+    } catch (error) {
+      console.error('[fixture] boot failed but page remains alive', error);
+    }
+  </script>
+</body>
+</html>
