@@ -1,4 +1,5 @@
-// RENDERER2 capture v4.14 OSS (virtual-time VT worker)
+// RENDERER2 capture v4.15 OSS (virtual-time VT worker)
+// - v4.15 OSS: CDE2の連続合成ステージ契約へ毎フレームの絶対時刻Tを同期通知する。
 // - v4.14 OSS: WebGLの初回boot失敗とcontext未生成をready契約＋後方互換ガードで検出する。
 // - v4.13 OSS: WebGLコンテキスト喪失を検出し、黒いJPEGを成功扱いせず段階再試行へ返す。
 // - v4.12 OSS: 最初のフレームが出ないワーカーの起動監視と、段階別の性能計測を追加。
@@ -489,6 +490,17 @@ function sceneIndexOf(T) {
     await page.evaluate((T, hasSlider, useClockBridge) => {
       if (useClockBridge && typeof window.__rendererSetTime === 'function') {
         window.__rendererSetTime(T * 1000);
+      }
+      // CDE2と同じ連続合成ステージ契約を最優先する。WebGLデッキは
+      // navigator.webdriver中の自走rAFを止めるため、RENDERER2が指定時刻Tを
+      // 明示しないと初期フレームのまま全尺が固定される。
+      const omStage = document.querySelector('[data-om-exportable-video-with-duration-secs]');
+      if (omStage) {
+        const sync = omStage.hasAttribute('data-om-sync-seek');
+        omStage.dispatchEvent(new CustomEvent('data-om-seek-to-time-frame', {
+          detail: { time: T, playing: false, sync },
+        }));
+        return;
       }
       const sl = document.querySelector('input[type=range]');
       if (!hasSlider || !sl) {

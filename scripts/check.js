@@ -17,6 +17,7 @@ const files = [
   'scripts/manifest-mode-test.js',
   'scripts/webgl-readiness-test.js',
   'scripts/webgl-context-loss-test.js',
+  'scripts/om-seek-contract-test.js',
 ];
 
 for (const file of files) {

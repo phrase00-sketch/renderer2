@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0 — 2026-09-05
+
+- Drive CDE2 continuous-composition stages through `data-om-seek-to-time-frame` on every virtual-time output frame.
+- Keep deck-side preview loops stopped under WebDriver while still providing the exact absolute render time.
+- Add a real Chromium regression proving that a no-slider stage receives frame times from 0.0 through 0.3 seconds instead of remaining on its initial frame.
+
 ## 1.6.0 — 2026-08-31
 
 - Treat CDE2 `manifest.json` `renderMode` as the authoritative CSS / virtual-time selection for ZIP inputs.

@@ -19,6 +19,7 @@ CDE2が「AI生成物を自分で直す編集台」なら、RENDERER2はその�
 - rAF / Canvas / WebGL / `setTimeout` 向けの決定論的な仮想時間方式
 - 縦型・横型を含む任意のステージサイズ検出
 - CDE2のシーン境界、動画イン点 `data-vin`、ナレーション、BGMへの対応
+- CDE2連続合成ステージの `data-om-seek-to-time-frame` 時刻同期
 - `<video data-audio="1">` と `<audio>` の音声合成
 - 実行ごとに固有の一時フォルダを使う安全な並行実行
 - 重いWebGLでコンテキストが失われた区間を検出し、黒いフレームを完成扱いせず自動再試行
@@ -86,7 +87,7 @@ Windowsランチャーは、ZIPではCDE2の `manifest.json` にある `renderMo
 
 ### デッキ互換性
 
-RENDERER2は、`BOUNDS = [...]`、`duration = ...`、タイムライン用range input、またはCDE2互換のシーン構造を持つHTMLを想定しています。動画素材の小さな開始位置調整には `<video data-vin="秒">` を使います。素材の残り尺がシーン尺以上であることを確認してください。
+RENDERER2は、`BOUNDS = [...]`、`duration = ...`、タイムライン用range input、またはCDE2互換のシーン構造を持つHTMLを想定しています。`data-om-exportable-video-with-duration-secs` を持つ連続合成ステージには、VT経路が各フレームの絶対時刻を `data-om-seek-to-time-frame` で通知します。動画素材の小さな開始位置調整には `<video data-vin="秒">` を使います。素材の残り尺がシーン尺以上であることを確認してください。
 
 新しいWebGLデッキは、初回描画の完了とboot errorを明示する任意のversioned status契約を利用できます。既存デッキは撮影前にWebGL contextが最低1つ作られたことを確認する後方互換経路で動きます。仕様と実装例は [docs/webgl-deck-contract.md](docs/webgl-deck-contract.md) を参照してください。
 
@@ -109,6 +110,7 @@ If CDE2 is the editing desk where an AI-generated result is finished by hand, RE
 - Deterministic virtual-time capture for rAF, Canvas, WebGL, and timers
 - Automatic portrait, landscape, and custom stage-size detection
 - CDE2 scene boundaries, `data-vin`, narration, and BGM support
+- CDE2 continuous-composition timing through `data-om-seek-to-time-frame`
 - Audio composition from `<video data-audio="1">` and `<audio>` elements
 - Unique per-run temporary frame directories
 - WebGL context-loss detection so visually broken shards retry instead of passing as black output
