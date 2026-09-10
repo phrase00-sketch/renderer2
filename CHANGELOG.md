@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.8.1 - 2026-09-11
+
+- Allow inert x-dc wrappers in static HTML without waiting for a React runtime. Native runtime evidence still requires readiness.
+- Add a static x-dc CSS timing regression and align scene identity / preview geometry documentation with CDE2 36.0.4.
+
 ## 1.8.0 — 2026-09-10
 
 - Drive explicit `__DECK__.renderAt(T)` / `window.renderAt(T)` hooks during CSS capture without overwriting their independent cue clocks.

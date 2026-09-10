@@ -1,6 +1,6 @@
 {
   "name": "@phrase00-sketch/renderer2",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Deterministic local MP4 renderer for CDE2 and compatible HTML motion-design decks.",
   "private": true,
   "type": "commonjs",

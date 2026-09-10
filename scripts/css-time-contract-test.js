@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'renderer2-render-at-'));
-for (const mode of (process.env.TEST_MODE ? [process.env.TEST_MODE] : ['deck-hook', 'window-hook', 'slider', 'css', 'absolute-css', 'renamed-overlays', 'declared-absolute', 'declared-relative', 'media-starts'])) {
+for (const mode of (process.env.TEST_MODE ? [process.env.TEST_MODE] : ['deck-hook', 'window-hook', 'slider', 'css', 'absolute-css', 'renamed-overlays', 'declared-absolute','static-xdc', 'declared-relative', 'media-starts'])) {
   const dir = path.join(root, mode);
   fs.mkdirSync(dir);
   const hook = mode.endsWith('hook');
@@ -27,12 +27,13 @@ for (const mode of (process.env.TEST_MODE ? [process.env.TEST_MODE] : ['deck-hoo
     ${mode === 'window-hook' ? 'window.renderAt=async(t)=>{await Promise.resolve();seek(t)};' : ''}
     ${mode === 'slider' ? "document.querySelector('input').addEventListener('input',e=>seek(+e.target.value));" : ''}
     </script>`;
-  if (['absolute-css','renamed-overlays','declared-absolute','declared-relative','media-starts'].includes(mode)) html = `<!doctype html><style>
+  if (['absolute-css','renamed-overlays','declared-absolute','static-xdc','declared-relative','media-starts'].includes(mode)) html = `<!doctype html><style>
     .stage{width:640px;height:360px;position:relative}section{position:absolute;inset:0;opacity:0;animation:on .5s linear forwards;animation-delay:var(--t0)}@keyframes on{0%,99.99%{opacity:1}100%{opacity:0}}</style>
     <div id="dc-root"><div class="stage" data-cde-stage data-render-mode="css" data-bounds="[0,0.5]"><section id="first" data-screen-label="first" style="--t0:0s;background:red"></section><section id="second" data-screen-label="second" style="--t0:.5s;background:blue"></section></div></div>
     <script>window.React={};window.ReactDOM={}; // BOUNDS=[0,0.5] duration=1
     </script>`;
   if(mode==='renamed-overlays')html=html.replaceAll('--t0','--s').replace('</div></div>','<aside>Overlay</aside></div></div>');
+  if(mode==='static-xdc')html=html.replace('window.React={};window.ReactDOM={};','').replace('<div id="dc-root">','<x-dc>').replace('</div></div>','</div></x-dc>').replaceAll('section','article').replace('data-bounds="[0,0.5]"','data-bounds="[0,0.5]" data-cde-time-mode="absolute"');
   if(mode==='declared-absolute')html=html.replace('data-bounds="[0,0.5]"','data-cde-time-mode="absolute"');
   if(mode==='declared-relative')html=html.replace('data-bounds="[0,0.5]"','data-bounds="[0,0.5]" data-cde-time-mode="scene-relative"');
   if(mode==='media-starts'){

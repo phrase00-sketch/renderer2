@@ -101,7 +101,7 @@ const md = htmlText.match(/\bduration\s*=\s*([0-9]+(?:\.[0-9]+)?)/);
 const HTML_DURATION = md ? Number(md[1]) : 0;
 const HAS_TIMELINE = BOUNDS.length > 1;
 const USE_CLOCK_BRIDGE = HAS_TIMELINE && /\bperformance\.now\s*\(/.test(htmlText);
-const EXPECTS_DC_RUNTIME = /id\s*=\s*["']dc-root["']|<x-dc\b|\bsupport\.js\b|\bReactDOM\b|\bcreateRoot\s*\(/i.test(htmlText);
+const EXPECTS_DC_RUNTIME = /id\s*=\s*["']dc-root["']|<sc-if\b|data-dc-script|\bsupport\.js\b|\bReactDOM\b|\bcreateRoot\s*\(/i.test(htmlText);
 console.log('BOUNDS', JSON.stringify(BOUNDS), '(' + BOUNDS.length + ' scenes)');
 if (HTML_DURATION) console.log('HTML duration', HTML_DURATION);
 if (USE_CLOCK_BRIDGE) console.log('CLOCK deterministic performance.now bridge enabled');
