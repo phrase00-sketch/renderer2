@@ -1,4 +1,5 @@
-// RENDERER2 capture v4.11 OSS
+// RENDERER2 capture v4.13 OSS
+// - v4.13 OSS: explicit renderAt hooks and absolute CSS clock/media contracts.
 // - v4.11 OSS: ローカル配信用のパス境界検証と入力ファイル検証を追加。
 // - v4.10: <video data-vin="秒"> をCDE2と同じ意味の素材開始位置として反映（2026-08-04）
 // - v4.9: デッキが uploads/○○_指示一式/ の下にあるCDE2 ZIP（support.js等はZIPルート側）で
@@ -320,6 +321,67 @@ function startServer() {
   }
   console.log('✅ 起動OK。');
 
+  // Explicit absolute-time hooks take precedence over preview sliders and clocks.
+  // Pause without overwriting currentTime: the deck may use separate subtitle cues.
+  await page.evaluate(() => {
+function absoluteCssStage(){
+  var el=document.querySelector('[data-cde-stage][data-render-mode="css"]');
+  if(!el)return null;
+  var mode=el.getAttribute('data-cde-time-mode');
+  if(mode==='scene-relative')return null;
+  if(mode==='absolute')return el;
+  try{
+    var b=JSON.parse(el.getAttribute('data-bounds'));
+    var cs=Array.from(el.querySelectorAll('[data-screen-label],section[id^="S_"]')).filter(function(e){
+      for(var p=e.parentElement;p&&p!==el;p=p.parentElement)if(p.matches('[data-screen-label],section[id^="S_"]'))return false;
+      return true;
+    });
+    if(!Array.isArray(b)||b.length<2||cs.length!==b.length||b[0]!==0)return null;
+    for(var i=0;i<b.length;i++){
+      if(!Number.isFinite(b[i])||(i&&b[i]<=b[i-1]))return null;
+      var st=getComputedStyle(cs[i]),names=st.animationName.split(','),delays=st.animationDelay.split(',');
+      if(!names.some(function(name,k){var d=delays[k%delays.length].trim(),n=parseFloat(d)/(d.endsWith('ms')?1000:1);return name.trim()!=='none'&&Number.isFinite(n)&&Math.abs(n-b[i])<.001;}))return null;
+    }
+    return el;
+  }catch(e){return null;}
+}
+function absoluteVideoStart(v,stage){
+  if(!stage||!stage.contains(v))return null;
+  // The nearest animated wrapper may introduce a shot partway through a scene.
+  for(var el=v;el&&el!==stage;el=el.parentElement){
+    var st=getComputedStyle(el),names=st.animationName.split(','),delays=st.animationDelay.split(','),starts=[];
+    names.forEach(function(name,k){var d=delays[k%delays.length].trim(),n=parseFloat(d)/(d.endsWith('ms')?1000:1);if(name.trim()!=='none'&&Number.isFinite(n))starts.push(n);});
+    if(starts.length)return Math.min.apply(Math,starts);
+  }
+  return 0;
+}
+    window.__rendererAbsoluteCss = absoluteCssStage;
+    window.__rendererVideoTime = (v,t,fallback) => {
+      const explicit=parseFloat(v.getAttribute('data-t0'));
+      if(Number.isFinite(explicit))return Math.max(0,t-explicit);
+      const start=absoluteVideoStart(v,absoluteCssStage());
+      return start===null?fallback:Math.max(0,t-start);
+    };
+    window.__rendererSeekDeck = async (t) => {
+      const owner = window.__DECK__ && typeof window.__DECK__.renderAt === 'function'
+        ? window.__DECK__ : window;
+      if (typeof owner.renderAt !== 'function') return false;
+      const pause = () => {
+        for (const a of document.getAnimations()) {
+          const time = a.currentTime;
+          a.pause();
+          if (time != null) a.currentTime = time;
+        }
+      };
+      pause();
+      await owner.renderAt(t);
+      // React setState hooks may return before their commit callback runs.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      pause();
+      return true;
+    };
+  });
+
   // v4.3: ステージ寸法を自動検出してビューポートを合わせる（縦・任意サイズ対応）
   const stageDims = await page.evaluate(() => {
     const st = (() => {
@@ -437,8 +499,9 @@ function startServer() {
       if (useClockBridge && typeof window.__rendererSetTime === 'function') {
         window.__rendererSetTime(T * 1000);
       }
+      const explicitSeek = await window.__rendererSeekDeck(T);
       const sl = document.querySelector('input[type=range]');
-      if (hasSlider && sl) {
+      if (!explicitSeek && hasSlider && sl) {
         const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(sl), 'value').set;
         setter.call(sl, String(T));
         sl.dispatchEvent(new Event('input', { bubbles: true }));
@@ -490,12 +553,15 @@ function startServer() {
       if (useClockBridge && typeof window.__rendererSetTime === 'function') {
         window.__rendererSetTime(T * 1000);
       }
+      const explicitSeek = await window.__rendererSeekDeck(T);
       if (hasSlider) {
         const sl = document.querySelector('input[type=range]');
-        const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(sl), 'value').set;
-        setter.call(sl, String(T));
-        sl.dispatchEvent(new Event('input', { bubbles: true }));
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        if (!explicitSeek) {
+          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(sl), 'value').set;
+          setter.call(sl, String(T));
+          sl.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
         // 撮影時だけプレイヤー操作UIを隠す（ステージの外側のスライダーコンテナ）
         const stageEl = (() => {
           const byClass = document.querySelector('.stage');
@@ -529,7 +595,7 @@ function startServer() {
           }
         }
       }
-      if (!hasSlider && useClockBridge) {
+      if (!explicitSeek && !hasSlider && useClockBridge) {
         // v4.8: 従来は「performance.now() を更新した次のrAFでReact stateが切り替わる」前提の
         // rAF固定2回待ちだったが、高負荷時はcommitが間に合わず旧シーンのまま撮影されうる。
         // 表示中の [data-scene] が期待シーンに一致するまで待つ（上限10rAF）。
@@ -558,9 +624,9 @@ function startServer() {
         if (expected && !matched) window.__sceneWaitOff = 1; // 契約外デッキ：以後は従来動作に戻す
       }
       let el;
-      if (isTimeline) { let n = 0; for (let k = 0; k < BOUNDS.length; k++) if (T >= BOUNDS[k]) n = k; el = (T - BOUNDS[n]) * 1000; }
+      if (isTimeline && !window.__rendererAbsoluteCss()) { let n = 0; for (let k = 0; k < BOUNDS.length; k++) if (T >= BOUNDS[k]) n = k; el = (T - BOUNDS[n]) * 1000; }
       else { el = T * 1000; }
-      const freeze = () => { for (const a of document.getAnimations()) { try { a.pause(); a.currentTime = el; } catch (e) {} } };
+      const freeze = () => { for (const a of document.getAnimations()) { try { const time = a.currentTime; a.pause(); if (!explicitSeek) a.currentTime = el; else if (time != null) a.currentTime = time; } catch (e) {} } };
       freeze();
       await new Promise(r => requestAnimationFrame(r));
       freeze();
@@ -575,7 +641,7 @@ function startServer() {
           if (v.preload !== 'auto') v.preload = 'auto';
           const dur = v.duration;
           if (!isFinite(dur) || dur <= 0) continue; // メタデータ未着はスキップ（次フレームで追いつく）
-          const t = el / 1000;
+          const t = window.__rendererVideoTime(v, T, el / 1000);
           const vin = Math.max(0, parseFloat(v.getAttribute('data-vin') || '0') || 0);
           const hi = Math.max(vin, dur - 0.05);
           const span = Math.max(0.001, dur - vin);
@@ -612,7 +678,7 @@ function startServer() {
         const sceneStart = BOUNDS[n] || 0;
         const videos = Array.from(document.querySelectorAll('video')).map(v => {
           const dur = Number(v.duration);
-          const rel = T - sceneStart;
+          const rel = window.__rendererVideoTime(v, T, T - sceneStart);
           const vin = Math.max(0, parseFloat(v.getAttribute('data-vin') || '0') || 0);
           const hi = Math.max(vin, dur - 0.05);
           const span = Math.max(0.001, dur - vin);
@@ -620,8 +686,9 @@ function startServer() {
           return { src: decodeURIComponent((v.currentSrc || v.src || '').split('/').pop() || ''), vin, currentTime: v.currentTime, target, duration: dur, paused: v.paused, seeking: v.seeking, readyState: v.readyState };
         });
         const times = document.getAnimations().map(a => Number(a.currentTime)).filter(Number.isFinite);
-        const scene = document.querySelector('[data-screen-label]');
-        return { T, sceneIndex: n, sceneStart, sceneId: scene ? scene.id : null, animationMinMs: times.length ? Math.min(...times) : null, animationMaxMs: times.length ? Math.max(...times) : null, videos };
+        const visibleScenes = Array.from(document.querySelectorAll('[data-screen-label]')).filter(e => +getComputedStyle(e).opacity > .5);
+        const scene = window.__rendererAbsoluteCss() ? visibleScenes.at(-1) : visibleScenes[0];
+        return { T, visibleSceneIds: visibleScenes.map(e => e.id), sceneIndex: n, sceneStart, sceneId: scene ? scene.id : null, animationMinMs: times.length ? Math.min(...times) : null, animationMaxMs: times.length ? Math.max(...times) : null, videos };
       }, T, BOUNDS);
       fs.appendFileSync(TRACE_FILE, JSON.stringify({ frame: i, ...trace }) + '\n');
     }

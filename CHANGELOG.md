@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0 — 2026-09-10
+
+- Drive explicit `__DECK__.renderAt(T)` / `window.renderAt(T)` hooks during CSS capture without overwriting their independent cue clocks.
+- Support `data-cde-time-mode="absolute|scene-relative"` independently of CSS/VT mode. Infer older static CSS clocks from computed scene delays, allowing arbitrary CSS variable names and global overlay siblings.
+- Honor `data-t0` as global media start in CSS capture, with nearest animated-wrapper delay as an absolute-CSS fallback and `data-vin` retained as source offset.
+- Add real Chromium clock regressions and a shared authoring-contract reference. Preserve public file-boundary checks, runtime detection, and output dimension normalization.
+
+
 ## 1.7.0 — 2026-09-05
 
 - Drive CDE2 continuous-composition stages through `data-om-seek-to-time-frame` on every virtual-time output frame.

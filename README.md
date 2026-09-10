@@ -164,3 +164,9 @@ npm run test:vt
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## 時間制御規約 / Timeline contract
+
+[CSSの時間基準・動画開始位置・互換検査 / CSS clocks, media starts, and compatibility checks](docs/TIMING_CONTRACT.md)を参照してください。描画方式CSS/VTと、絶対時間/シーン相対時間は別の指定です。
+
+Run `npm run test:timing` to verify explicit hooks, legacy/absolute CSS, mode overrides, global overlays, and mid-scene video starts in Chromium.

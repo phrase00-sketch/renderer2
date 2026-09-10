@@ -10,6 +10,7 @@ const files = [
   'capture-deck2-vt.js',
   'vt-probe.js',
   'scripts/render-vt.js',
+  'scripts/css-time-contract-test.js',
   'scripts/smoke-test.js',
   'scripts/adaptive-retry.js',
   'scripts/adaptive-retry-test.js',
