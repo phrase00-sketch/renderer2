@@ -5,6 +5,8 @@ const { spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const files = [
+  'deck-timing.js',
+  'scripts/duration-contract-test.js',
   'capture-parallel.js',
   'capture-deck2.js',
   'capture-deck2-vt.js',

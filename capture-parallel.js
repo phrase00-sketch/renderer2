@@ -26,6 +26,7 @@
 //              PORT=8800(基準) KEEP_FRAMES=1 PROTO_TIMEOUT=ms RETRY_PROTO_TIMEOUT=ms RETRY_FAILED_SHARDS=0|1
 // 各ワーカー(capture-deck2.js)が担当フレーム区間を FRAMES_DIR に書き出し、最後に親が1回だけ ffmpeg で結合＋音声合成する。
 const fs = require('fs');
+const { sourceDuration } = require('./deck-timing');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
@@ -204,7 +205,7 @@ if (!NOAUDIO) {
     const html = fs.readFileSync(DECK_ABS, 'utf8');
     let bounds = null, durTotal = null;
     try { const bm = html.match(/BOUNDS\s*=\s*(\[[^\]]*\])/); if (bm) bounds = JSON.parse(bm[1]); } catch (e) {}
-    const dm = html.match(/duration\s*=\s*([0-9.]+)/); if (dm) durTotal = Number(dm[1]);
+    durTotal = sourceDuration(html);
     if (process.env.BOUNDS) { try { bounds = JSON.parse(process.env.BOUNDS); } catch (e) {} }
     if (process.env.DURATION) durTotal = Number(process.env.DURATION);
     if (!Array.isArray(bounds) || !bounds.length) bounds = [0];

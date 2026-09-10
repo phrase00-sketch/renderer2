@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.8.2 - 2026-09-11
+
+- Read declared stage duration before legacy numeric source assignments, preventing variable-based decks from receiving a guessed ending.
+- Preserve existing duration overrides and fallback behavior; add real-browser duration regressions.
+- Resolve runtime __DECK__.duration in CSS and VT capture, including no-slider decks; share declared timing with media-audio end calculations.
+
 ## 1.8.1 - 2026-09-11
 
 - Allow inert x-dc wrappers in static HTML without waiting for a React runtime. Native runtime evidence still requires readiness.

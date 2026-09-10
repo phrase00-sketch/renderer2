@@ -37,6 +37,7 @@ const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
 const puppeteer = require('puppeteer');
+const { sourceDuration, runtimeDuration } = require('./deck-timing');
 
 let DECK = process.argv[2];
 if (!DECK) {
@@ -97,8 +98,7 @@ if (process.env.BOUNDS) {
   const m = htmlText.match(/BOUNDS\s*=\s*(\[[^\]]*\])/);
   BOUNDS = m ? JSON.parse(m[1]) : [0];
 }
-const md = htmlText.match(/\bduration\s*=\s*([0-9]+(?:\.[0-9]+)?)/);
-const HTML_DURATION = md ? Number(md[1]) : 0;
+const HTML_DURATION = sourceDuration(htmlText);
 const HAS_TIMELINE = BOUNDS.length > 1;
 const USE_CLOCK_BRIDGE = HAS_TIMELINE && /\bperformance\.now\s*\(/.test(htmlText);
 const EXPECTS_DC_RUNTIME = /id\s*=\s*["']dc-root["']|<sc-if\b|data-dc-script|\bsupport\.js\b|\bReactDOM\b|\bcreateRoot\s*\(/i.test(htmlText);
@@ -407,15 +407,10 @@ function absoluteVideoStart(v,stage){
     ]);
   } catch (e) {}
 
-  // --- 尺(DURATION): env > slider.max > BOUNDS末尾+6 ---
-  let DURATION = Number(process.env.DURATION || HTML_DURATION || 0);
-  if (!DURATION) {
-    DURATION = await page.evaluate(() => {
-      if (typeof window.duration === 'number' && isFinite(window.duration) && window.duration > 0) return window.duration;
-      const s = document.querySelector('input[type=range]');
-      const m = s && parseFloat(s.max);
-      return (m && isFinite(m)) ? m : 0;
-    });
+  // Explicit override > declared/runtime deck timing > legacy fallback.
+  let DURATION = Number(process.env.DURATION || 0);
+  if (!Number.isFinite(DURATION) || DURATION <= 0) {
+    DURATION = await page.evaluate(runtimeDuration, HTML_DURATION);
   }
   if (!DURATION) DURATION = BOUNDS[BOUNDS.length - 1] + 6;
   console.log('DURATION', DURATION, 'sec / FPS', FPS, '/ audio', AUDIO ? 'yes' : 'no');
